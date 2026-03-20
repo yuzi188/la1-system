@@ -25,10 +25,64 @@ export default function HomePage() {
 
   const gameTabs = ["最愛", "電子", "真人", "捕魚"];
 
+  // Real AI-generated banner images
   const banners = [
-    { title: "VIP 專屬待遇", sub: "尊享私人客服與高額返水", color: "linear-gradient(135deg, #FFD700, #D4AF37)", emoji: "👑" },
-    { title: "首充豪禮", sub: "最高贈送 100% 獎金", color: "linear-gradient(135deg, #00BFFF, #1E90FF)", emoji: "🎁" },
-    { title: "邀請好友", sub: "賺取永久佣金回報", color: "linear-gradient(135deg, #FF4500, #FF8C00)", emoji: "🤝" },
+    {
+      img: "/assets/hero-main.jpg",
+      title: "LA1 AI 娛樂",
+      sub: "信任 · 快速 · 頂級",
+    },
+    {
+      img: "/assets/banner-vip.jpg",
+      title: "VIP 專屬待遇",
+      sub: "尊享私人客服與高額返水",
+    },
+    {
+      img: "/assets/banner-bonus.jpg",
+      title: "首充豪禮",
+      sub: "最高贈送 100% 獎金",
+    },
+    {
+      img: "/assets/banner-invite.jpg",
+      title: "邀請返傭",
+      sub: "無限返水永久佣金",
+    },
+  ];
+
+  // Game category data with real images
+  const gamesByTab = {
+    "最愛": [
+      { name: "老虎機", img: "/assets/game-electronic.jpg", tag: "熱門", color: "#FFD700" },
+      { name: "真人百家樂", img: "/assets/game-live.jpg", tag: "VIP", color: "#00BFFF" },
+      { name: "捕魚達人", img: "/assets/game-fishing.jpg", tag: "刺激", color: "#FFD700" },
+      { name: "AI 遊戲", img: "/assets/game-ai.png", tag: "新上線", color: "#00BFFF" },
+    ],
+    "電子": [
+      { name: "老虎機", img: "/assets/game-electronic.jpg", tag: "熱門", color: "#FFD700" },
+      { name: "水果機", img: "/assets/game-slot.png", tag: "經典", color: "#FFD700" },
+      { name: "AI 遊戲", img: "/assets/game-ai.png", tag: "新上線", color: "#00BFFF" },
+      { name: "骰寶", img: "/assets/game-roulette.png", tag: "刺激", color: "#00BFFF" },
+    ],
+    "真人": [
+      { name: "真人百家樂", img: "/assets/game-live.jpg", tag: "VIP", color: "#00BFFF" },
+      { name: "真人輪盤", img: "/assets/game-roulette.png", tag: "熱門", color: "#FFD700" },
+      { name: "真人21點", img: "/assets/game-baccarat.png", tag: "經典", color: "#FFD700" },
+      { name: "真人龍虎", img: "/assets/dealer-1.png", tag: "刺激", color: "#00BFFF" },
+    ],
+    "捕魚": [
+      { name: "捕魚達人", img: "/assets/game-fishing.jpg", tag: "熱門", color: "#FFD700" },
+      { name: "深海獵手", img: "/assets/game-fishing.jpg", tag: "刺激", color: "#00BFFF" },
+      { name: "金鯊傳說", img: "/assets/game-fishing.jpg", tag: "VIP", color: "#FFD700" },
+      { name: "海底寶藏", img: "/assets/game-fishing.jpg", tag: "新上線", color: "#00BFFF" },
+    ],
+  };
+
+  const scrollGames = [
+    { name: "真人百家樂", img: "/assets/game-live.jpg", color: "#FFD700" },
+    { name: "捕魚達人", img: "/assets/game-fishing.jpg", color: "#00BFFF" },
+    { name: "老虎機", img: "/assets/game-electronic.jpg", color: "#FFD700" },
+    { name: "AI 遊戲", img: "/assets/game-ai.png", color: "#00BFFF" },
+    { name: "輪盤", img: "/assets/game-roulette.png", color: "#FFD700" },
   ];
 
   useEffect(() => {
@@ -114,48 +168,61 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* ── Banner Carousel ── */}
+      {/* ── Banner Carousel with Real Images ── */}
       <div style={{
         position: "relative",
-        height: "160px",
-        borderRadius: "14px",
+        height: "180px",
+        borderRadius: "16px",
         overflow: "hidden",
         marginBottom: "16px",
-        boxShadow: "0 0 30px rgba(255,215,0,0.1)",
+        boxShadow: "0 0 30px rgba(255,215,0,0.15)",
+        border: "1px solid rgba(255,215,0,0.2)",
       }}>
         {banners.map((banner, i) => (
           <div key={i} style={{
             position: "absolute",
             inset: 0,
-            background: banner.color,
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "center",
-            padding: "20px",
             opacity: currentBanner === i ? 1 : 0,
             transition: "opacity 0.8s ease",
-            overflow: "hidden",
           }}>
-            <h2 style={{ fontSize: "22px", fontWeight: "900", color: "#000", marginBottom: "6px" }}>{banner.title}</h2>
-            <p style={{ fontSize: "13px", color: "rgba(0,0,0,0.7)" }}>{banner.sub}</p>
+            {/* Background image */}
             <div style={{
-              position: "absolute", right: "-15px", bottom: "-15px",
-              fontSize: "90px", opacity: 0.2,
-            }}>{banner.emoji}</div>
+              position: "absolute", inset: 0,
+              backgroundImage: `url(${banner.img})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              transform: currentBanner === i ? "scale(1.02)" : "scale(1)",
+              transition: "transform 4s ease",
+            }} />
+            {/* Overlay gradient */}
+            <div style={{
+              position: "absolute", inset: 0,
+              background: "linear-gradient(to right, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.2) 60%, transparent 100%)",
+            }} />
+            {/* Text */}
+            <div style={{
+              position: "absolute", bottom: "20px", left: "18px",
+            }}>
+              <div style={{
+                fontSize: "18px", fontWeight: "900", color: "#FFD700",
+                textShadow: "0 0 20px rgba(255,215,0,0.8)",
+                marginBottom: "4px",
+              }}>{banner.title}</div>
+              <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.8)" }}>{banner.sub}</div>
+            </div>
           </div>
         ))}
         {/* Dots */}
         <div style={{
-          position: "absolute", bottom: "10px", left: "50%",
-          transform: "translateX(-50%)",
-          display: "flex", gap: "6px",
+          position: "absolute", bottom: "10px", right: "14px",
+          display: "flex", gap: "5px",
         }}>
           {banners.map((_, i) => (
             <div key={i} onClick={() => setCurrentBanner(i)} style={{
-              width: currentBanner === i ? "20px" : "6px",
-              height: "6px",
+              width: currentBanner === i ? "18px" : "5px",
+              height: "5px",
               borderRadius: "3px",
-              background: currentBanner === i ? "#000" : "rgba(0,0,0,0.3)",
+              background: currentBanner === i ? "#FFD700" : "rgba(255,255,255,0.3)",
               transition: "all 0.3s",
               cursor: "pointer",
             }} />
@@ -230,49 +297,52 @@ export default function HomePage() {
         ))}
       </div>
 
-      {/* ── Game Cards Grid ── */}
+      {/* ── Game Cards Grid with Real Images ── */}
       <div style={{
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
         gap: "12px",
         marginBottom: "20px",
       }}>
-        {[
-          { name: "老虎機", icon: "🎰", tag: "熱門", color: "#FFD700" },
-          { name: "百家樂", icon: "🃏", tag: "VIP", color: "#00BFFF" },
-          { name: "輪盤", icon: "🎡", tag: "經典", color: "#FFD700" },
-          { name: "AI 遊戲", icon: "🤖", tag: "新上線", color: "#00BFFF" },
-        ].map((game, i) => (
+        {(gamesByTab[activeTab] || []).map((game, i) => (
           <a key={i} href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer"
             className="game-card"
             style={{
               height: "160px",
               display: "flex",
               flexDirection: "column",
-              justifyContent: "space-between",
-              padding: "14px",
-              background: `linear-gradient(135deg, rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.08), rgba(0,0,0,0.9))`,
-              border: `1px solid rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.2)`,
+              justifyContent: "flex-end",
+              padding: "12px",
+              background: `url(${game.img}) center/cover no-repeat`,
               borderRadius: "14px",
               textDecoration: "none",
+              position: "relative",
+              overflow: "hidden",
+              border: `1px solid rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.25)`,
+              boxShadow: `0 0 15px rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.1)`,
             }}>
-            <div style={{ fontSize: "36px" }}>{game.icon}</div>
-            <div>
+            {/* Dark overlay */}
+            <div style={{
+              position: "absolute", inset: 0,
+              background: "linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.2) 60%, transparent 100%)",
+            }} />
+            <div style={{ position: "relative", zIndex: 1 }}>
               <div style={{
                 display: "inline-block",
                 fontSize: "10px", padding: "2px 8px",
-                background: `rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.15)`,
+                background: `rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.2)`,
                 borderRadius: "10px",
                 color: game.color, marginBottom: "4px",
+                border: `1px solid rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.3)`,
               }}>{game.tag}</div>
-              <div style={{ fontWeight: "800", fontSize: "15px" }}>{game.name}</div>
+              <div style={{ fontWeight: "800", fontSize: "14px", color: "#fff" }}>{game.name}</div>
               <div style={{ fontSize: "11px", color: game.color }}>立即遊玩 ›</div>
             </div>
           </a>
         ))}
       </div>
 
-      {/* ── Horizontal Scroll ── */}
+      {/* ── Horizontal Scroll with Real Images ── */}
       <div style={{ marginBottom: "20px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px" }}>
           <span style={{ fontWeight: "800", color: "#FFD700", fontSize: "15px" }}>🔥 推薦遊戲</span>
@@ -283,28 +353,27 @@ export default function HomePage() {
           display: "flex", gap: "12px",
           overflowX: "auto", paddingBottom: "8px",
         }}>
-          {[
-            { name: "真人百家樂", icon: "🎴", color: "#FFD700" },
-            { name: "捕魚達人", icon: "🐟", color: "#00BFFF" },
-            { name: "骰寶", icon: "🎲", color: "#FFD700" },
-            { name: "龍虎鬥", icon: "🐉", color: "#FF4500" },
-            { name: "21 點", icon: "♠️", color: "#00BFFF" },
-          ].map((game, i) => (
+          {scrollGames.map((game, i) => (
             <a key={i} href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer"
               className="game-card"
               style={{
                 minWidth: "110px", height: "140px", flexShrink: 0,
                 display: "flex", flexDirection: "column",
-                justifyContent: "space-between",
-                padding: "12px",
-                background: `rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.05)`,
-                border: `1px solid rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.15)`,
+                justifyContent: "flex-end",
+                padding: "10px",
+                background: `url(${game.img}) center/cover no-repeat`,
                 borderRadius: "12px",
                 textDecoration: "none",
+                position: "relative",
+                overflow: "hidden",
+                border: `1px solid rgba(${i % 2 === 0 ? "255,215,0" : "0,191,255"},0.2)`,
               }}>
-              <span style={{ fontSize: "30px" }}>{game.icon}</span>
-              <div>
-                <div style={{ fontSize: "12px", fontWeight: "700" }}>{game.name}</div>
+              <div style={{
+                position: "absolute", inset: 0,
+                background: "linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 60%)",
+              }} />
+              <div style={{ position: "relative", zIndex: 1 }}>
+                <div style={{ fontSize: "12px", fontWeight: "700", color: "#fff" }}>{game.name}</div>
                 <div style={{ fontSize: "10px", color: game.color }}>遊玩 ›</div>
               </div>
             </a>
@@ -328,6 +397,25 @@ export default function HomePage() {
           <path d="M21 4L3 11.3l5.8 2.1L18 7.6l-6.9 6.1.1 5L14 15.8l3.1 2.3L21 4Z" fill="#000"/>
         </svg>
         立即加入 @LA1111_bot
+      </a>
+
+      {/* ── Floating Daily Race Button ── */}
+      <a href="/activity" style={{
+        position: "fixed",
+        right: "16px",
+        bottom: "80px",
+        width: "56px", height: "56px",
+        background: "linear-gradient(135deg, #FFD700, #FFA500)",
+        borderRadius: "50%",
+        display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+        boxShadow: "0 0 20px rgba(255,215,0,0.5)",
+        textDecoration: "none",
+        animation: "float 3s ease-in-out infinite",
+        zIndex: 100,
+      }}>
+        <span style={{ fontSize: "20px" }}>🏆</span>
+        <span style={{ fontSize: "8px", color: "#000", fontWeight: "800" }}>每日賽</span>
       </a>
     </div>
   );
