@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "LA1 | Premium Platform",
-  description: "LA1 premium landing page",
+  title: "LA1 | AI Entertainment - Trust · Fast · Premium",
+  description: "LA1 AI Entertainment - Premium gaming platform with Slots, Roulette, Baccarat, Live Casino & AI Games",
 };
 
 export default function RootLayout({ children }) {

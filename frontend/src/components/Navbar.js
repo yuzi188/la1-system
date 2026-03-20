@@ -11,15 +11,17 @@ export default function Navbar() {
         </a>
 
         <div className="nav-links">
-          <a href="#games">熱門內容</a>
-          <a href="#live">真人專區</a>
-          <a href="#member">會員中心</a>
-          <a href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">聯繫客服</a>
+          <a href="#games">Games</a>
+          <a href="#live">Live Casino</a>
+          <a href="#member">VIP Hub</a>
+          <a href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">@LA1111_bot</a>
         </div>
 
         <div className="nav-actions">
-          <a className="btn btn-outline" href="#member">會員中心</a>
-          <a className="btn btn-primary" href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">立即開始</a>
+          <a className="btn btn-outline" href="#member">Member</a>
+          <a className="btn btn-primary" href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">
+            Join Now
+          </a>
         </div>
       </div>
     </div>

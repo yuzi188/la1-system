@@ -1,27 +1,27 @@
 const games = [
   {
-    title: "老虎機",
-    desc: "高對比視覺卡片，讓內容入口不再像廉價按鈕。",
+    title: "Slots",
+    desc: "Premium slot machines with massive jackpots and stunning visuals.",
     img: "/assets/game-slot.png",
-    tag: "熱門入口"
+    tag: "Hot Games"
   },
   {
-    title: "輪盤",
-    desc: "卡片 hover 發光與浮起，整體更像產品平台。",
+    title: "Roulette",
+    desc: "Classic European & American roulette with live odds tracking.",
     img: "/assets/game-roulette.png",
-    tag: "即時互動"
+    tag: "Classic"
   },
   {
-    title: "百家樂",
-    desc: "保留娛樂感，但把色系與節奏統一成高級版。",
+    title: "Baccarat",
+    desc: "The king of card games — fast, elegant, and high-stakes.",
     img: "/assets/game-baccarat.png",
-    tag: "經典內容"
+    tag: "VIP Pick"
   },
   {
-    title: "AI 推薦",
-    desc: "把 AI 放成獨立入口，強化 LA1 品牌記憶點。",
+    title: "AI Game",
+    desc: "AI-powered smart gaming — next-gen entertainment experience.",
     img: "/assets/game-ai.png",
-    tag: "智能推薦"
+    tag: "AI Powered"
   }
 ];
 
@@ -31,24 +31,24 @@ export default function GamesSection() {
       <div className="container">
         <div className="section-head">
           <div>
-            <h2>熱門入口重做</h2>
+            <h2>Popular Games</h2>
           </div>
           <p>
-            這一區直接重做成高級平台卡片，不再是單純貼圖。每張卡片都有圖片、遮罩、標題與 CTA。
+            Explore our premium collection of casino games — from classic table games to AI-powered entertainment.
           </p>
         </div>
 
         <div className="card-grid">
           {games.map((game) => (
-            <div key={game.title} className="glass game-card">
+            <a key={game.title} className="glass game-card" href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">
               <div className="thumb" style={{ backgroundImage: `url(${game.img})` }}></div>
               <div className="content">
                 <span className="pill">{game.tag}</span>
                 <h3>{game.title}</h3>
                 <p>{game.desc}</p>
-                <span className="card-cta">立即進入</span>
+                <span className="card-cta">Play Now</span>
               </div>
-            </div>
+            </a>
           ))}
         </div>
       </div>
