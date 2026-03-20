@@ -1,40 +1,35 @@
 import {useState,useEffect} from "react";
 
-const firstNames = [
-  "阿明","小王","張哥","李姐","陳董","林Sir","黃大","周總","吳老闆","鄭姐",
-  "趙哥","孫總","錢姐","王董","劉Sir","楊大","蔡總","許姐","謝哥","郭董",
-  "Jason","Mike","David","Kevin","Alex","Tony","Jack","Leo","Sam","Eric",
-  "Amy","Lisa","Jenny","Cathy","Linda","Nancy","Sandy","Vivian","Grace","Helen",
-  "Player_88","Lucky_99","VIP_007","King_168","Boss_666","Star_520","Hero_888","Rich_999","Pro_168","Ace_777",
-  "大贏家","幸運星","金手指","常勝軍","財神爺","小確幸","暴富哥","連勝王","穩贏姐","發財虎",
-  "Diamond","Phoenix","Dragon","Tiger","Eagle","Wolf","Shark","Falcon","Panther","Cobra",
-  "台北阿凱","高雄小李","台中老張","新竹阿偉","桃園小陳","台南大哥","嘉義阿姨","花蓮老王","宜蘭小妹","屏東阿伯",
-  "Crypto_King","BTC_Boss","USDT_Pro","ETH_Master","Web3_God","DeFi_Lord","NFT_Queen","Whale_888","Hodl_King","Moon_Boy"
+const accounts = [
+  "user_8832","user_4471","user_2209","user_6653","user_3318",
+  "user_7741","user_9902","user_5564","user_1127","user_8845",
+  "vip_1688","vip_5288","vip_8888","vip_3366","vip_6699",
+  "vip_2288","vip_7788","vip_4488","vip_9988","vip_1188",
+  "pro_9527","pro_3388","pro_6677","pro_1199","pro_8811",
+  "pro_4422","pro_7733","pro_2266","pro_5599","pro_9944",
+  "ace_1680","ace_5200","ace_8880","ace_3360","ace_6600",
+  "ace_2280","ace_7700","ace_4400","ace_9900","ace_1100"
 ];
 
 const actions = [
-  {text:"剛儲值", amounts:["$500","$1,000","$2,000","$5,000","$10,000","$888","$1,688","$3,000"]},
-  {text:"贏了", amounts:["$1,200","$3,500","$8,800","$15,000","$28,000","$6,666","$12,888","$50,000"]},
-  {text:"連續贏", amounts:["3局","5局","7局","10局","12局"]},
-  {text:"提款成功", amounts:["$2,000","$5,000","$10,000","$20,000","$8,888","$15,888"]},
-  {text:"升級VIP", amounts:["銀卡","金卡","鑽石卡","至尊卡"]},
-  {text:"獲得獎金", amounts:["$888","$1,688","$6,666","$8,888","$18,888"]},
-  {text:"百家樂大贏", amounts:["$5,000","$12,000","$25,000","$38,000"]},
-  {text:"老虎機爆獎", amounts:["$3,000","$8,000","$15,000","$30,000","$88,000"]},
+  {text:"儲值", amounts:["$500","$1,000","$2,000","$5,000","$888","$1,688","$3,000","$10,000"]},
+  {text:"贏了", amounts:["$1,200","$3,500","$8,800","$6,666","$12,888","$28,000","$5,000","$15,000"]},
+  {text:"提款成功", amounts:["$2,000","$5,000","$8,888","$10,000","$15,888","$20,000","$3,000","$6,000"]},
+  {text:"連贏", amounts:["3局","5局","7局","10局","12局"]},
 ];
 
-const emojis = ["🔥","💰","🎉","🏆","💎","⭐","🚀","👑","💵","🎰"];
+const emojis = ["🔥","💰","🎉","🏆","💎","⭐","🚀","👑"];
 
 export default function PlayerFeed(){
   const [msg,setMsg]=useState("");
 
   useEffect(()=>{
     const update=()=>{
-      const name = firstNames[Math.floor(Math.random()*firstNames.length)];
+      const acc = accounts[Math.floor(Math.random()*accounts.length)];
       const action = actions[Math.floor(Math.random()*actions.length)];
       const amount = action.amounts[Math.floor(Math.random()*action.amounts.length)];
       const emoji = emojis[Math.floor(Math.random()*emojis.length)];
-      setMsg(`${emoji} ${name} ${action.text} ${amount}`);
+      setMsg(`${emoji} ${acc} ${action.text} ${amount}`);
     };
     update();
     const timer = setInterval(update, 2500);
