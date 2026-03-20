@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="700" viewBox="0 0 900 700">
+  <rect width="900" height="700" fill="#0a101c"/>
+  <rect x="120" y="120" width="660" height="460" rx="38" fill="#0f1d22" stroke="#1f4f54"/>
+  <rect x="240" y="220" width="160" height="220" rx="20" fill="#f8fafc"/>
+  <rect x="500" y="220" width="160" height="220" rx="20" fill="#f8fafc"/>
+  <text x="288" y="355" font-size="72" fill="#8b5cf6" font-family="Arial">A</text>
+  <text x="548" y="355" font-size="72" fill="#38bdf8" font-family="Arial">K</text>
+  <circle cx="450" cy="500" r="54" fill="#d8b4fe"/>
+</svg>
