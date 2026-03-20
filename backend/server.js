@@ -112,6 +112,16 @@ app.post("/ipn",(req,res)=>{
   res.send("ok");
 });
 
+// ===== CRM LEADS =====
+app.get("/leads",(req,res)=>{
+  db.all("SELECT * FROM leads ORDER BY created_at DESC",(e,rows)=>res.json(rows||[]));
+});
+
+app.put("/leads/:id",(req,res)=>{
+  db.run("UPDATE leads SET status=? WHERE id=?",[req.body.status,req.params.id]);
+  res.json({ok:true});
+});
+
 // Health check
 app.get("/",(req,res)=>res.json({status:"ok",service:"la1-backend"}));
 
