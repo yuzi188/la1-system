@@ -122,6 +122,19 @@ app.put("/leads/:id",(req,res)=>{
   res.json({ok:true});
 });
 
+// ===== ADMIN API =====
+app.get("/admin/users",(req,res)=>{
+  db.all("SELECT id,username,balance,level FROM users",(e,rows)=>res.json(rows||[]));
+});
+
+app.get("/admin/deposits",(req,res)=>{
+  db.all("SELECT * FROM deposits ORDER BY id DESC",(e,rows)=>res.json(rows||[]));
+});
+
+app.get("/admin/leads",(req,res)=>{
+  db.all("SELECT * FROM leads ORDER BY created_at DESC",(e,rows)=>res.json(rows||[]));
+});
+
 // Health check
 app.get("/",(req,res)=>res.json({status:"ok",service:"la1-backend"}));
 
