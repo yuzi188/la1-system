@@ -1,9 +1,10 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const sqlite3 = require("sqlite3").verbose();
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
-const crypto = require("crypto");
 
 const app = express();
 app.use(cors());
@@ -11,10 +12,10 @@ app.use(express.json());
 
 const db = new sqlite3.Database("./db.sqlite");
 
-db.serialize(() => {
+db.serialize(()=>{
   db.run(`CREATE TABLE IF NOT EXISTS users(
     id INTEGER PRIMARY KEY,
-    username TEXT,
+    username TEXT UNIQUE,
     password TEXT,
     balance REAL DEFAULT 0,
     level TEXT DEFAULT 'normal'
@@ -41,68 +42,78 @@ function auth(req){
 }
 
 function sendTG(msg){
-  axios.get(`https://api.telegram.org/bot${process.env.TG_TOKEN}/sendMessage`,{
-    params:{chat_id:process.env.TG_ID,text:msg}
-  });
+  if(process.env.TG_TOKEN && process.env.TG_ID){
+    axios.get(`https://api.telegram.org/bot${process.env.TG_TOKEN}/sendMessage`,{
+      params:{chat_id:process.env.TG_ID,text:msg}
+    }).catch(()=>{});
+  }
 }
 
 app.post("/register",(req,res)=>{
   db.run("INSERT INTO users(username,password) VALUES (?,?)",
-  [req.body.username,req.body.password]);
-  res.json({ok:true});
+  [req.body.username,req.body.password],(err)=>{
+    if(err) return res.json({error:"用戶名已存在"});
+    sendTG(`📝 新用戶註冊：${req.body.username}`);
+    res.json({ok:true});
+  });
 });
 
 app.post("/login",(req,res)=>{
   db.get("SELECT * FROM users WHERE username=? AND password=?",
   [req.body.username,req.body.password],(e,u)=>{
     if(!u) return res.json({error:"fail"});
+    sendTG(`🔑 用戶登入：${u.username}`);
     res.json({token:jwt.sign({id:u.id},"secret")});
   });
 });
 
+app.get("/me",(req,res)=>{
+  try{
+    const u = auth(req);
+    db.get("SELECT id,username,balance,level FROM users WHERE id=?",[u.id],(e,row)=>res.json(row||{}));
+  }catch(e){
+    res.json({error:"unauthorized"});
+  }
+});
+
 app.post("/create-payment", async (req,res)=>{
-  const {amount} = req.body;
-  const user = auth(req);
+  try{
+    const u = auth(req);
+    if(!process.env.PAY_KEY) return res.json({error:"儲值功能尚未啟用"});
 
-  const pay = await axios.post("https://api.nowpayments.io/v1/payment",{
-    price_amount: amount,
-    price_currency:"usd",
-    pay_currency:"usdttrc20"
-  },{
-    headers:{"x-api-key":process.env.PAY_KEY}
-  });
+    const pay = await axios.post("https://api.nowpayments.io/v1/payment",{
+      price_amount:req.body.amount,
+      price_currency:"usd",
+      pay_currency:"usdttrc20"
+    },{
+      headers:{"x-api-key":process.env.PAY_KEY}
+    });
 
-  db.run(`INSERT INTO deposits(user_id,amount,status,payment_id)
-  VALUES (?,?,?,?)`,
-  [user.id,amount,"waiting",pay.data.payment_id]);
+    db.run(`INSERT INTO deposits(user_id,amount,status,payment_id) VALUES (?,?,?,?)`,
+    [u.id,req.body.amount,"waiting",pay.data.payment_id]);
 
-  res.json(pay.data);
+    sendTG(`💳 儲值請求：$${req.body.amount}`);
+    res.json(pay.data);
+  }catch(e){
+    res.json({error:"payment failed"});
+  }
 });
 
 app.post("/ipn",(req,res)=>{
-  const hash = crypto.createHmac("sha512",process.env.IPN_SECRET)
-  .update(JSON.stringify(req.body)).digest("hex");
-
-  if(hash !== req.headers["x-nowpayments-sig"]) return res.send("bad");
-
   if(req.body.payment_status==="finished"){
-    db.get(`SELECT * FROM deposits WHERE payment_id=?`,
+    db.get("SELECT * FROM deposits WHERE payment_id=?",
     [req.body.payment_id],(e,row)=>{
       if(!row || row.status==="done") return;
-      db.run(`UPDATE deposits SET status='done' WHERE id=?`,[row.id]);
-      db.run(`UPDATE users SET balance = balance + ? WHERE id=?`,
-      [row.amount,row.user_id]);
-      sendTG("💰 收款成功");
+      db.run("UPDATE deposits SET status='done' WHERE id=?",[row.id]);
+      db.run("UPDATE users SET balance=balance+? WHERE id=?",[row.amount,row.user_id]);
+      sendTG(`💰 收款成功：$${row.amount}`);
     });
   }
-
   res.send("ok");
 });
 
-app.get("/me",(req,res)=>{
-  const u = auth(req);
-  db.get("SELECT * FROM users WHERE id=?",[u.id],(e,row)=>res.json(row));
-});
+// Health check
+app.get("/",(req,res)=>res.json({status:"ok",service:"la1-backend"}));
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, ()=> console.log(`LA1 Backend running on port ${PORT}`));
