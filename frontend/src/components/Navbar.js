@@ -6,22 +6,21 @@ export default function Navbar() {
           <div className="brand-mark">LA1</div>
           <div className="brand-copy">
             <strong>LA1</strong>
-            <span>AI Entertainment</span>
+            <span>AI 娛樂平台</span>
           </div>
         </a>
 
         <div className="nav-links">
-          <a href="#games">Games</a>
-          <a href="#live">Live Casino</a>
-          <a href="#member">VIP Hub</a>
-          <a href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">@LA1111_bot</a>
+          <a href="#">首頁</a>
+          <a href="#games">遊戲</a>
+          <a href="#live">真人娛樂場</a>
+          <a href="#member">會員中心</a>
+          <a href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">客服</a>
         </div>
 
         <div className="nav-actions">
-          <a className="btn btn-outline" href="#member">Member</a>
-          <a className="btn btn-primary" href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">
-            Join Now
-          </a>
+          <a className="btn btn-outline" href="#member">會員中心</a>
+          <a className="btn btn-primary" href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">立即加入</a>
         </div>
       </div>
     </div>

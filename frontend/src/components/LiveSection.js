@@ -4,29 +4,47 @@ export default function LiveSection() {
       <div className="container">
         <div className="section-head">
           <div>
-            <h2>Live Casino</h2>
+            <h2>真人娛樂場</h2>
           </div>
           <p>
-            Experience the thrill of real-time gaming with our professional live dealers in a premium VIP environment.
+            與專業真人荷官即時互動，身臨其境的 VIP 頂級娛樂體驗，盡在 LA1。
           </p>
         </div>
-
         <div className="dealer-wrap">
-          <a className="glass dealer-card" href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">
-            <div className="dealer-media" style={{ backgroundImage: "url('/assets/dealer-1.png')" }}></div>
+          <a
+            className="glass dealer-card"
+            href="https://t.me/LA1111_bot"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <div
+              className="dealer-media"
+              style={{ backgroundImage: "url('/assets/dealer-1.png')" }}
+            ></div>
             <div className="dealer-content">
-              <span className="pill">VIP Live</span>
-              <h3>Premium Live Experience</h3>
-              <p>Professional dealers, real-time interaction, and immersive HD streaming for the ultimate casino experience.</p>
+              <span className="pill">VIP 真人</span>
+              <h3>頂級真人體驗</h3>
+              <p>
+                專業荷官全程陪伴，高清直播畫面，讓您感受最真實的娛樂場氛圍。
+              </p>
             </div>
           </a>
-
-          <a className="glass dealer-card" href="https://t.me/LA1111_bot" target="_blank" rel="noopener noreferrer">
-            <div className="dealer-media" style={{ backgroundImage: "url('/assets/dealer-2.png')" }}></div>
+          <a
+            className="glass dealer-card"
+            href="https://t.me/LA1111_bot"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <div
+              className="dealer-media"
+              style={{ backgroundImage: "url('/assets/dealer-2.png')" }}
+            ></div>
             <div className="dealer-content">
-              <span className="pill">Premium Host</span>
-              <h3>Exclusive VIP Tables</h3>
-              <p>Private high-stakes tables with dedicated hosts — the pinnacle of luxury gaming.</p>
+              <span className="pill">尊享包廂</span>
+              <h3>私人 VIP 專屬桌</h3>
+              <p>
+                高額私人包廂，專屬荷官服務，奢華娛樂體驗的極致之選。
+              </p>
             </div>
           </a>
         </div>

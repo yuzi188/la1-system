@@ -4,13 +4,13 @@ export default function Hero() {
     <section className="hero">
       <div className="container">
         <div className="hero-banner">
-          <img src="/assets/hero-main.png" alt="LA1 AI Entertainment" />
+          <img src="/assets/hero-main.png" alt="LA1 AI 娛樂平台" />
           <div className="hero-overlay">
             <h1>
               <span className="gradient">LA1</span>{" "}
-              <span style={{ color: "#fff" }}>AI Entertainment</span>
+              <span style={{ color: "#fff" }}>AI 娛樂平台</span>
             </h1>
-            <div className="hero-tagline">Trust · Fast · Premium</div>
+            <div className="hero-tagline">信任 · 快速 · 頂級</div>
             <div className="hero-actions">
               <a
                 className="btn btn-primary"
@@ -24,10 +24,10 @@ export default function Hero() {
                     fill="#000"
                   />
                 </svg>
-                Join @LA1111_bot
+                立即開始
               </a>
               <a className="btn btn-outline" href="#games">
-                Explore Games
+                探索遊戲
               </a>
             </div>
           </div>
@@ -36,15 +36,15 @@ export default function Hero() {
         <div className="trust-bar">
           <div className="trust-item">
             <span className="trust-icon">🔒</span>
-            100% Secure
+            100% 安全
           </div>
           <div className="trust-item">
             <span className="trust-icon">⚡</span>
-            24/7 Online
+            全天候在線
           </div>
           <div className="trust-item">
             <span className="trust-icon">🌐</span>
-            Global
+            全球服務
           </div>
         </div>
       </div>
