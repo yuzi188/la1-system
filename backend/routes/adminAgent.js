@@ -88,14 +88,16 @@ router.get("/admin/agents", requireAdmin, async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// POST /admin/agents — Create agent (user_id, ratio 10%-30%)
+// POST /admin/agents — Create agent
+// Accepts user_id (users.id), tg_id, or username for flexible user lookup
+// ratio must be between 0.1 (10%) and 0.3 (30%)
 // ══════════════════════════════════════════════════════════════════════════════
 router.post("/admin/agents", requireAdmin, async (req, res) => {
   try {
     const { user_id, ratio } = req.body;
 
     if (!user_id) {
-      return res.status(400).json({ error: "缺少 user_id" });
+      return res.status(400).json({ error: "缺少 user_id（可輸入用戶 ID、TG ID 或用戶名）" });
     }
 
     // Validate ratio: must be between 0.1 (10%) and 0.3 (30%)
@@ -104,29 +106,73 @@ router.post("/admin/agents", requireAdmin, async (req, res) => {
       return res.status(400).json({ error: "分潤比例必須在 10%~30% 之間 (0.1~0.3)" });
     }
 
-    // Check user exists
-    const user = await dbGet("SELECT id, username FROM users WHERE id = ?", [user_id]);
-    if (!user) {
-      return res.status(404).json({ error: "找不到該用戶" });
+    // Flexible user lookup: try users.id first, then tg_id, then username
+    // This allows admin to input any of: numeric user ID, Telegram ID, or username
+    const searchVal = String(user_id).trim();
+    let user = null;
+
+    // 1. Try by users.id (numeric)
+    if (/^\d+$/.test(searchVal)) {
+      user = await dbGet(
+        "SELECT id, username, tg_id, tg_username FROM users WHERE id = ?",
+        [parseInt(searchVal, 10)]
+      );
     }
 
+    // 2. If not found, try by tg_id (stored as TEXT)
+    if (!user) {
+      user = await dbGet(
+        "SELECT id, username, tg_id, tg_username FROM users WHERE tg_id = ?",
+        [searchVal]
+      );
+    }
+
+    // 3. If still not found, try by username (case-insensitive)
+    if (!user) {
+      user = await dbGet(
+        "SELECT id, username, tg_id, tg_username FROM users WHERE LOWER(username) = LOWER(?)",
+        [searchVal]
+      );
+    }
+
+    // 4. If still not found, try by tg_username
+    if (!user) {
+      user = await dbGet(
+        "SELECT id, username, tg_id, tg_username FROM users WHERE LOWER(tg_username) = LOWER(?)",
+        [searchVal]
+      );
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: `找不到該用戶（輸入值：${searchVal}）。請確認用戶 ID、TG ID 或用戶名是否正確。` });
+    }
+
+    const resolvedUserId = user.id;
+
     // Check if already an agent
-    const existing = await dbGet("SELECT id FROM agents WHERE user_id = ?", [user_id]);
+    const existing = await dbGet("SELECT id FROM agents WHERE user_id = ?", [resolvedUserId]);
     if (existing) {
-      return res.status(409).json({ error: "該用戶已是代理" });
+      return res.status(409).json({ error: `該用戶（${user.username || user.tg_username}）已是代理` });
     }
 
     // Create agent
     await dbRun(
       "INSERT INTO agents (user_id, ratio) VALUES (?, ?)",
-      [user_id, agentRatio]
+      [resolvedUserId, agentRatio]
     );
 
     // Also set is_agent flag on users table (existing column)
-    await dbRun("UPDATE users SET is_agent = 1 WHERE id = ?", [user_id]);
+    await dbRun("UPDATE users SET is_agent = 1 WHERE id = ?", [resolvedUserId]);
 
-    console.log(`[AdminAgent] Agent created: user_id=${user_id}, ratio=${agentRatio} by admin ${req.admin.username || req.admin.id}`);
-    res.json({ ok: true, message: "代理已建立", user_id, ratio: agentRatio });
+    console.log(`[AdminAgent] Agent created: user_id=${resolvedUserId} (${user.username}), ratio=${agentRatio} by admin ${req.admin.username || req.admin.id}`);
+    res.json({
+      ok: true,
+      message: "代理已建立",
+      user_id: resolvedUserId,
+      username: user.username,
+      tg_id: user.tg_id,
+      ratio: agentRatio
+    });
   } catch (e) {
     console.error("[AdminAgent] create error:", e.message);
     res.status(500).json({ error: "建立失敗" });

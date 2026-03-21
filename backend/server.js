@@ -559,7 +559,8 @@ app.get("/admin/users", adminLimiter, checkRole(["super_admin", "operator"]), as
 });
 
 app.post("/admin/adjust-balance", adminLimiter, async (req, res) => {
-  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  let adminPayload;
+  try { adminPayload = adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
   const { userId, amount, type, reason } = req.body;
   if (!userId || !amount || !type) return res.status(400).json({ error: "缺少必要參數" });
   const numAmount = parseFloat(amount);
@@ -567,28 +568,72 @@ app.post("/admin/adjust-balance", adminLimiter, async (req, res) => {
   if (numAmount > 10000000) return res.status(400).json({ error: "單筆上分/扣分不能超過 10,000,000 USDT" });
   if (type !== "add" && type !== "deduct") return res.status(400).json({ error: "type 必須為 add 或 deduct" });
 
-  db.get("SELECT * FROM users WHERE id = ?", [userId], (err, user) => {
+  try {
+    const user = await dbGet("SELECT * FROM users WHERE id = ?", [userId]);
     if (!user) return res.status(404).json({ error: "用戶不存在" });
+
     const newBalance = type === "add" ? user.balance + numAmount : user.balance - numAmount;
     if (newBalance < 0) return res.status(400).json({ error: `餘額不足，當前：${user.balance.toFixed(2)}` });
 
-    db.run("UPDATE users SET balance = ? WHERE id = ?", [newBalance, userId], (updateErr) => {
-      if (updateErr) return res.status(500).json({ error: "更新失敗" });
-      db.run("INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
-        [userId, type, numAmount, reason || "", "admin"]);
+    // Determine balance_log type: admin_add or admin_deduct
+    const logType = type === "add" ? "admin_add" : "admin_deduct";
 
-      // Feature #6: TG notification for deposit (type=add)
-      if (user.tg_id) {
-        const displayName = user.tg_first_name || user.tg_username || user.username;
-        const actionText = type === "add" ? "充值" : "扣款";
-        const emoji = type === "add" ? "💰" : "📤";
-        const msg = `${emoji} <b>帳戶${actionText}通知</b>\n\n親愛的 ${displayName}，\n您的帳戶已${type === "add" ? "充值" : "扣除"} <b>${numAmount.toFixed(2)} USDT</b>\n💼 當前餘額：<b>${newBalance.toFixed(2)} USDT</b>${reason ? `\n📝 備註：${reason}` : ""}\n\n如有疑問請聯繫客服 @LA1111_bot`;
-        sendTGToUser(user.tg_id, msg);
-      }
-      sendTG(`${type === "add" ? "⬆️ 上分" : "⬇️ 扣分"} | ${user.tg_username || user.username} | ${numAmount} USDT | 餘額: ${newBalance.toFixed(2)}`);
-      res.json({ ok: true, newBalance, message: `${type === "add" ? "上分" : "扣分"}成功` });
+    // Determine if this should count as a deposit (update total_deposit)
+    // Keywords: 儲值, 充值, deposit, 入款, 補款
+    const reasonLower = (reason || "").toLowerCase();
+    const isDepositKeyword = /儲值|充值|deposit|入款|補款/.test(reasonLower);
+    const shouldUpdateDeposit = type === "add" && isDepositKeyword;
+
+    // Build operator string with admin info
+    const operatorStr = `admin:${adminPayload.username || adminPayload.id}`;
+
+    // Update balance (and optionally total_deposit)
+    if (shouldUpdateDeposit) {
+      await dbRun(
+        "UPDATE users SET balance = ?, total_deposit = total_deposit + ? WHERE id = ?",
+        [newBalance, numAmount, userId]
+      );
+    } else {
+      await dbRun("UPDATE users SET balance = ? WHERE id = ?", [newBalance, userId]);
+    }
+
+    // Record to balance_logs with proper type
+    await dbRun(
+      "INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
+      [userId, logType, type === "add" ? numAmount : -numAmount, reason || "", operatorStr]
+    );
+
+    // Log admin action
+    logAdminAction(
+      adminPayload.id,
+      type === "add" ? "adjust_balance_add" : "adjust_balance_deduct",
+      "user",
+      { userId, amount: numAmount, reason, shouldUpdateDeposit },
+      req
+    );
+
+    // TG notification to user
+    if (user.tg_id) {
+      const displayName = user.tg_first_name || user.tg_username || user.username;
+      const actionText = type === "add" ? "上分" : "扣款";
+      const emoji = type === "add" ? "💰" : "📤";
+      const depositNote = shouldUpdateDeposit ? "\n📊 已計入累計儲值" : "";
+      const msg = `${emoji} <b>帳戶${actionText}通知</b>\n\n親愛的 ${displayName}，\n您的帳戶已${type === "add" ? "增加" : "扣除"} <b>${numAmount.toFixed(2)} USDT</b>\n💼 當前餘額：<b>${newBalance.toFixed(2)} USDT</b>${reason ? `\n📝 備註：${reason}` : ""}${depositNote}\n\n如有疑問請聯繫客服 @LA1111_bot`;
+      sendTGToUser(user.tg_id, msg);
+    }
+    sendTG(`${type === "add" ? "⬆️ 上分" : "⬇️ 扣分"} | ${user.tg_username || user.username} | ${numAmount} USDT | 餘額: ${newBalance.toFixed(2)} | 備註: ${reason || "無"}${shouldUpdateDeposit ? " | 已計入儲值" : ""}`);
+
+    res.json({
+      ok: true,
+      newBalance,
+      message: `${type === "add" ? "上分" : "扣分"}成功`,
+      deposit_updated: shouldUpdateDeposit,
+      log_type: logType
     });
-  });
+  } catch (e) {
+    console.error("[adjust-balance] error:", e.message);
+    res.status(500).json({ error: "操作失敗" });
+  }
 });
 
 app.get("/admin/balance-logs", adminLimiter, (req, res) => {
@@ -2595,6 +2640,87 @@ app.get("/admin/backup-db/users", adminLimiter, checkRole(["super_admin", "opera
     });
   } catch (e) {
     res.status(500).json({ error: "導出失敗", detail: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// USER BALANCE LOGS — for frontend transaction history page
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/user/balance-logs
+ * Returns the authenticated user's balance_logs (all types) sorted newest first.
+ * Used by the frontend transaction history page to show full balance history.
+ */
+app.get("/api/user/balance-logs", async (req, res) => {
+  try {
+    const u = auth(req);
+    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    const offset = parseInt(req.query.offset) || 0;
+    const rows = await dbAll(
+      `SELECT id, type, amount, reason, operator, created_at
+       FROM balance_logs
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [u.id, limit, offset]
+    );
+    res.json({ ok: true, data: rows, total: rows.length });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+/**
+ * GET /admin/users/:id/balance-logs
+ * Returns a specific user's balance_logs for admin review.
+ * Accessible by super_admin and operator roles.
+ */
+app.get("/admin/users/:id/balance-logs", adminLimiter, checkRole(["super_admin", "operator"]), async (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    if (!userId) return res.status(400).json({ error: "無效的用戶 ID" });
+
+    const user = await dbGet("SELECT id, username, tg_username, tg_first_name, balance, total_deposit FROM users WHERE id = ?", [userId]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+
+    const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
+    const offset = parseInt(req.query.offset) || 0;
+
+    const logs = await dbAll(
+      `SELECT id, type, amount, reason, operator, created_at
+       FROM balance_logs
+       WHERE user_id = ?
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [userId, limit, offset]
+    );
+
+    const summary = await dbGet(
+      `SELECT
+         COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as total_in,
+         COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as total_out,
+         COUNT(*) as total_records
+       FROM balance_logs WHERE user_id = ?`,
+      [userId]
+    );
+
+    res.json({
+      ok: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        tg_username: user.tg_username,
+        display_name: user.tg_first_name || user.tg_username || user.username,
+        balance: user.balance,
+        total_deposit: user.total_deposit
+      },
+      summary,
+      data: logs
+    });
+  } catch (e) {
+    console.error("[admin/users/:id/balance-logs] error:", e.message);
+    res.status(500).json({ error: "查詢失敗" });
   }
 });
 
