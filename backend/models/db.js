@@ -4,11 +4,38 @@
  * All modules MUST require this file instead of creating their own
  * sqlite3.Database instances. This ensures a single connection is
  * shared across server.js, bot.js, services, and jobs.
+ *
+ * Persistent Volume support:
+ *   - On Railway (production), the /data directory is a mounted Persistent Volume.
+ *   - If /data exists and is writable, the database is stored at /data/la1.db.
+ *   - Otherwise (local development), the database falls back to ./db.sqlite.
  */
 
+const fs = require("fs");
+const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 
-const DB_PATH = process.env.DB_PATH || "./db.sqlite";
+// ── Determine DB path ────────────────────────────────────────────────────────
+
+function resolveDbPath() {
+  const persistentDir = "/data";
+  try {
+    // Check if /data directory exists and is writable (Railway Persistent Volume)
+    if (fs.existsSync(persistentDir)) {
+      fs.accessSync(persistentDir, fs.constants.W_OK);
+      const dbPath = path.join(persistentDir, "la1.db");
+      console.log("[DB] Persistent Volume detected — using:", dbPath);
+      return dbPath;
+    }
+  } catch (e) {
+    console.warn("[DB] /data not writable, falling back to local path:", e.message);
+  }
+  const localPath = process.env.DB_PATH || path.join(__dirname, "..", "db.sqlite");
+  console.log("[DB] Using local DB path:", localPath);
+  return localPath;
+}
+
+const DB_PATH = resolveDbPath();
 console.log("[DB] Unified DB instance — path:", DB_PATH);
 
 const db = new sqlite3.Database(DB_PATH);
@@ -90,6 +117,12 @@ function initSchema() {
     "last_deposit_at DATETIME",
     "total_bet REAL DEFAULT 0",
     "is_agent INTEGER DEFAULT 0",
+    "referral_code TEXT",
+    "nickname TEXT DEFAULT ''",
+    "nickname_changed INTEGER DEFAULT 0",
+    "avatar TEXT DEFAULT ''",
+    "backup_username TEXT DEFAULT ''",
+    "backup_password TEXT DEFAULT ''",
   ];
   newUserCols.forEach((col) => {
     const colName = col.split(" ")[0];
@@ -109,7 +142,7 @@ function initSchema() {
       created_by TEXT
     )`,
     () => {
-      // Seed default super admin: LA188YU / LA1admin888
+      // Seed default super admin: LA188YU / 585858
       const bcrypt = require("bcryptjs");
       const salt = bcrypt.genSaltSync(10);
       const hash = bcrypt.hashSync("585858", salt);
@@ -174,6 +207,118 @@ function initSchema() {
   );
 }
 
+// ── Data recovery: seed users if DB is newly created ─────────────────────────
+/**
+ * Restore user data on fresh database (new Persistent Volume or first boot).
+ * Uses INSERT OR IGNORE so existing data is never overwritten.
+ */
+async function seedUsersIfEmpty() {
+  try {
+    const count = await dbGet("SELECT COUNT(*) as cnt FROM users");
+    if (count && count.cnt > 0) {
+      console.log(`[DB] Users table already has ${count.cnt} record(s) — skipping seed.`);
+      return;
+    }
+
+    console.log("[DB] Users table is empty — seeding backup user data...");
+
+    const usersToRestore = [
+      {
+        id: 1,
+        username: "BXB_8889",
+        tg_id: "7959351635",
+        tg_first_name: "FDC",
+        tg_last_name: "",
+        tg_username: "BXB_8889",
+        balance: 10000299.5,
+        level: "normal",
+        vip_level: 0,
+        total_bet: 300,
+        total_deposit: 0,
+        first_deposit_claimed: 0,
+        invite_code: "LA144525D5A",
+        invited_by: 0,
+        invite_count: 0,
+        invite_earnings: 0,
+        wager_requirement: 0,
+        risk_flag: 0,
+        banned: 0,
+        ban_reason: "",
+        created_at: "2026-03-21 13:02:15",
+        daily_push_count: 0,
+        opt_out: 0,
+        is_agent: 0,
+        nickname: "",
+        nickname_changed: 0,
+        avatar: "",
+        backup_username: "",
+        backup_password: "",
+      },
+      {
+        id: 2,
+        username: "yu_888yu",
+        tg_id: "1401489682",
+        tg_first_name: "悟",
+        tg_last_name: "",
+        tg_username: "yu_888yu",
+        balance: 999999.5,
+        level: "normal",
+        vip_level: 0,
+        total_bet: 0,
+        total_deposit: 0,
+        first_deposit_claimed: 0,
+        invite_code: "LA1BD7F8D8E",
+        invited_by: 0,
+        invite_count: 0,
+        invite_earnings: 0,
+        wager_requirement: 1,
+        risk_flag: 0,
+        banned: 0,
+        ban_reason: "",
+        created_at: "2026-03-21 13:09:34",
+        daily_push_count: 0,
+        opt_out: 0,
+        is_agent: 0,
+        nickname: "",
+        nickname_changed: 0,
+        avatar: "",
+        backup_username: "",
+        backup_password: "",
+      },
+    ];
+
+    for (const u of usersToRestore) {
+      await dbRun(
+        `INSERT OR IGNORE INTO users (
+          id, username, password, tg_id, tg_first_name, tg_last_name, tg_username,
+          balance, level, vip_level, total_bet, total_deposit, first_deposit_claimed,
+          invite_code, invited_by, invite_count, invite_earnings, wager_requirement,
+          risk_flag, banned, ban_reason, created_at, daily_push_count, opt_out,
+          is_agent, nickname, nickname_changed, avatar, backup_username, backup_password
+        ) VALUES (
+          ?, ?, NULL, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?
+        )`,
+        [
+          u.id, u.username, u.tg_id, u.tg_first_name, u.tg_last_name, u.tg_username,
+          u.balance, u.level, u.vip_level, u.total_bet, u.total_deposit, u.first_deposit_claimed,
+          u.invite_code, u.invited_by, u.invite_count, u.invite_earnings, u.wager_requirement,
+          u.risk_flag, u.banned, u.ban_reason, u.created_at, u.daily_push_count, u.opt_out,
+          u.is_agent, u.nickname, u.nickname_changed, u.avatar, u.backup_username, u.backup_password,
+        ]
+      );
+      console.log(`[DB] Restored user: ${u.username} (id=${u.id}, balance=${u.balance})`);
+    }
+
+    console.log("[DB] User data seed complete.");
+  } catch (err) {
+    console.error("[DB] seedUsersIfEmpty error:", err.message);
+  }
+}
+
 // ── Exports ─────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -185,5 +330,6 @@ module.exports = {
   incrementPushCount,
   resetDailyPushCounts,
   initSchema,
+  seedUsersIfEmpty,
   DB_PATH,
 };

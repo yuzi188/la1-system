@@ -9,7 +9,7 @@ const bcrypt = require("bcryptjs");
 const rateLimit = require("express-rate-limit");
 
 // ── Feature #1: Unified DB instance ─────────────────────────────────────────
-const { db, dbGet, dbAll, dbRun, initSchema } = require("./models/db");
+const { db, dbGet, dbAll, dbRun, initSchema, seedUsersIfEmpty } = require("./models/db");
 
 // ── Push job & services ─────────────────────────────────────────────────────
 const { startPushJob } = require("./jobs/pushJob");
@@ -2559,6 +2559,10 @@ app.get("/admin/backup-db/users", adminLimiter, checkRole(["super_admin", "opera
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`LA1 Backend v5.2.0-referral running on port ${PORT}`);
+  // Restore user data if DB is newly created (Persistent Volume first boot)
+  setTimeout(() => {
+    seedUsersIfEmpty().catch(err => console.error("[DB] seedUsersIfEmpty failed:", err.message));
+  }, 2000);
   // Start the hourly push job
   startPushJob();
   // Start the agent settlement scheduler (runs hourly, executes at 3 AM)
