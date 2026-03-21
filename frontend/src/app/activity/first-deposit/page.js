@@ -15,12 +15,12 @@ export default function FirstDepositPage() {
     setToken(t);
   }, []);
 
-  async function claimBonus(tier) {
+  async function claimBonus() {
     if (!token) { router.push("/login"); return; }
     const res = await fetch(`${API}/promo/first-deposit`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ tier }),
+      body: JSON.stringify({ tier: "500" }),
     });
     const data = await res.json();
     if (data.ok) { setMsg(`🎁 首充獎勵 +${data.bonus} USDT 已到帳！`); setClaimed(true); }
@@ -53,66 +53,42 @@ export default function FirstDepositPage() {
       <div style={{ ...cardStyle, background: "linear-gradient(135deg, rgba(255,215,0,0.12), rgba(0,191,255,0.08))", borderColor: "rgba(255,215,0,0.4)", textAlign: "center", padding: "28px 20px" }}>
         <div style={{ fontSize: "48px", marginBottom: "8px" }}>💰</div>
         <h2 style={{ fontSize: "22px", fontWeight: "bold", color: "#FFD700", marginBottom: "4px" }}>新會員首充大禮包</h2>
-        <p style={{ color: "#aaa", fontSize: "13px" }}>僅限首次儲值，錯過不再有</p>
+        <p style={{ color: "#aaa", fontSize: "13px" }}>僅限首次儲值，每帳號限領一次</p>
       </div>
 
-      {/* Tier 1 */}
-      <div style={{ ...cardStyle, borderColor: "rgba(255,215,0,0.4)" }}>
+      {/* Single Tier */}
+      <div style={{ ...cardStyle, borderColor: "rgba(255,215,0,0.4)", position: "relative" }}>
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "3px", background: "linear-gradient(90deg, #FFD700, #FFA500)", borderRadius: "16px 16px 0 0" }} />
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
           <div>
-            <div style={{ fontSize: "28px", fontWeight: "900", color: "#FFD700" }}>充 100 送 38</div>
-            <div style={{ fontSize: "13px", color: "#aaa" }}>儲值滿 100 USDT，贈送 38 USDT</div>
+            <div style={{ fontSize: "26px", fontWeight: "900", color: "#FFD700" }}>儲值 500 送 165</div>
+            <div style={{ fontSize: "13px", color: "#aaa" }}>儲值 500 USDT，贈送 165 USDT</div>
           </div>
           <div style={{ textAlign: "center", background: "rgba(255,215,0,0.1)", borderRadius: "12px", padding: "10px 16px", border: "1px solid rgba(255,215,0,0.3)" }}>
-            <div style={{ fontSize: "22px", fontWeight: "bold", color: "#FFD700" }}>38%</div>
+            <div style={{ fontSize: "22px", fontWeight: "bold", color: "#FFD700" }}>33%</div>
             <div style={{ fontSize: "11px", color: "#888" }}>加碼比例</div>
           </div>
         </div>
         <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: "10px", padding: "12px", marginBottom: "12px" }}>
           <div style={{ fontSize: "12px", color: "#888", marginBottom: "6px" }}>📋 方案詳情</div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" }}>
-            <span style={{ color: "#aaa" }}>最低儲值</span><span style={{ color: "#fff" }}>100 USDT</span>
+            <span style={{ color: "#aaa" }}>最低儲值</span><span style={{ color: "#fff" }}>500 USDT</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" }}>
-            <span style={{ color: "#aaa" }}>贈送金額</span><span style={{ color: "#FFD700", fontWeight: "bold" }}>38 USDT</span>
+            <span style={{ color: "#aaa" }}>贈送金額</span><span style={{ color: "#FFD700", fontWeight: "bold" }}>165 USDT</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" }}>
+            <span style={{ color: "#aaa" }}>流水要求</span><span style={{ color: "#FF6347", fontWeight: "bold" }}>10 倍（665 × 10 = 6,650 USDT）</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" }}>
+            <span style={{ color: "#aaa" }}>完成期限</span><span style={{ color: "#fff" }}>領取後 7 天內</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-            <span style={{ color: "#aaa" }}>流水要求</span><span style={{ color: "#FF6347", fontWeight: "bold" }}>10 倍（1,380 USDT）</span>
+            <span style={{ color: "#aaa" }}>盈利上限</span><span style={{ color: "#fff" }}>獎金的 5 倍（最多提 825 USDT）</span>
           </div>
         </div>
-        <button onClick={() => claimBonus("100")} disabled={claimed} style={{ width: "100%", padding: "12px", borderRadius: "10px", border: "none", fontWeight: "bold", fontSize: "15px", cursor: claimed ? "default" : "pointer", background: claimed ? "rgba(255,255,255,0.05)" : "linear-gradient(135deg, #FFD700, #FFA500)", color: claimed ? "#555" : "#000" }}>
-          {claimed ? "已領取 ✅" : "立即領取 38 USDT"}
-        </button>
-      </div>
-
-      {/* Tier 2 */}
-      <div style={{ ...cardStyle, borderColor: "rgba(0,191,255,0.4)" }}>
-        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: "3px", background: "linear-gradient(90deg, #00BFFF, #1E90FF)", borderRadius: "16px 16px 0 0" }} />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-          <div>
-            <div style={{ fontSize: "28px", fontWeight: "900", color: "#00BFFF" }}>充 30 送 10</div>
-            <div style={{ fontSize: "13px", color: "#aaa" }}>儲值滿 30 USDT，贈送 10 USDT</div>
-          </div>
-          <div style={{ textAlign: "center", background: "rgba(0,191,255,0.1)", borderRadius: "12px", padding: "10px 16px", border: "1px solid rgba(0,191,255,0.3)" }}>
-            <div style={{ fontSize: "22px", fontWeight: "bold", color: "#00BFFF" }}>33%</div>
-            <div style={{ fontSize: "11px", color: "#888" }}>加碼比例</div>
-          </div>
-        </div>
-        <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: "10px", padding: "12px", marginBottom: "12px" }}>
-          <div style={{ fontSize: "12px", color: "#888", marginBottom: "6px" }}>📋 方案詳情</div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" }}>
-            <span style={{ color: "#aaa" }}>最低儲值</span><span style={{ color: "#fff" }}>30 USDT</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", marginBottom: "4px" }}>
-            <span style={{ color: "#aaa" }}>贈送金額</span><span style={{ color: "#00BFFF", fontWeight: "bold" }}>10 USDT</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-            <span style={{ color: "#aaa" }}>流水要求</span><span style={{ color: "#FF6347", fontWeight: "bold" }}>8 倍（80 USDT）</span>
-          </div>
-        </div>
-        <button onClick={() => claimBonus("30")} disabled={claimed} style={{ width: "100%", padding: "12px", borderRadius: "10px", border: "none", fontWeight: "bold", fontSize: "15px", cursor: claimed ? "default" : "pointer", background: claimed ? "rgba(255,255,255,0.05)" : "linear-gradient(135deg, #00BFFF, #1E90FF)", color: claimed ? "#555" : "#000" }}>
-          {claimed ? "已領取 ✅" : "立即領取 10 USDT"}
+        <button onClick={() => claimBonus()} disabled={claimed} style={{ width: "100%", padding: "12px", borderRadius: "10px", border: "none", fontWeight: "bold", fontSize: "15px", cursor: claimed ? "default" : "pointer", background: claimed ? "rgba(255,255,255,0.05)" : "linear-gradient(135deg, #FFD700, #FFA500)", color: claimed ? "#555" : "#000" }}>
+          {claimed ? "已領取 ✅" : "立即領取 165 USDT"}
         </button>
       </div>
 
@@ -121,11 +97,13 @@ export default function FirstDepositPage() {
         <h3 style={{ fontSize: "16px", fontWeight: "bold", color: "#FFD700", marginBottom: "12px" }}>📜 活動規則</h3>
         {[
           "本活動僅限新會員首次儲值，每個帳號只能領取一次",
-          "充 100 方案：需完成 10 倍流水（1,380 USDT）方可提款",
-          "充 30 方案：需完成 8 倍流水（80 USDT）方可提款",
-          "流水計算：所有遊戲有效投注均計入流水",
+          "最低儲值 500 USDT，贈送 165 USDT（33% 加碼）",
+          "流水要求：10 倍（本金 + 獎金）= 665 × 10 = 6,650 USDT",
+          "流水須於領取後 7 天內完成，逾期獎金及盈利自動清零",
+          "首充獎金產生的盈利上限為獎金的 5 倍（最多可提 825 USDT）",
           "本活動不可與其他優惠活動疊加使用",
-          "如發現對打、刷流水等違規行為，LA1 有權取消獎勵並封號",
+          "同 IP / 同設備只能領取一次",
+          "如發現對打、刷流水等違規行為，LA1 有權取消獎勵並永久封號",
           "LA1 保留本活動最終解釋權",
         ].map((rule, i) => (
           <div key={i} style={{ display: "flex", gap: "8px", marginBottom: "8px", fontSize: "13px", color: "#aaa", lineHeight: "1.5" }}>

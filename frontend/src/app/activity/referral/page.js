@@ -41,20 +41,21 @@ export default function ReferralPage() {
         <div style={{ position: "fixed", top: "20px", left: "50%", transform: "translateX(-50%)", background: "rgba(0,0,0,0.95)", border: "1px solid #FFD700", padding: "12px 24px", borderRadius: "12px", zIndex: 9999, color: "#FFD700", fontWeight: "bold", fontSize: "14px" }}>{msg}</div>
       )}
 
-      {/* Commission rates */}
+      {/* Referral Bonus Banner */}
       <div style={{ ...cardStyle, background: "linear-gradient(135deg, rgba(0,191,255,0.1), rgba(255,215,0,0.05))", borderColor: "rgba(0,191,255,0.3)" }}>
-        <h2 style={{ fontSize: "18px", fontWeight: "bold", color: "#FFD700", textAlign: "center", marginBottom: "16px" }}>永久佣金，無上限</h2>
-        <div style={{ display: "flex", gap: "12px" }}>
-          <div style={{ flex: 1, textAlign: "center", background: "rgba(255,215,0,0.1)", borderRadius: "12px", padding: "16px", border: "1px solid rgba(255,215,0,0.3)" }}>
-            <div style={{ fontSize: "36px", fontWeight: "900", color: "#FFD700" }}>15%</div>
-            <div style={{ fontSize: "13px", color: "#FFD700", fontWeight: "bold", marginBottom: "4px" }}>直推佣金</div>
-            <div style={{ fontSize: "11px", color: "#888" }}>好友首充金額的 15%</div>
+        <h2 style={{ fontSize: "18px", fontWeight: "bold", color: "#FFD700", textAlign: "center", marginBottom: "8px" }}>無上限邀請，長期有效</h2>
+        <p style={{ fontSize: "12px", color: "#888", textAlign: "center", marginBottom: "16px" }}>
+          好友透過邀請碼儲值成功，次日自動發放回饋紅利
+        </p>
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <div style={{ textAlign: "center", background: "rgba(255,215,0,0.1)", borderRadius: "12px", padding: "16px 32px", border: "1px solid rgba(255,215,0,0.3)" }}>
+            <div style={{ fontSize: "22px", fontWeight: "900", color: "#FFD700", lineHeight: "1.3" }}>每 100U 返 10U</div>
+            <div style={{ fontSize: "13px", color: "#FFD700", fontWeight: "bold", marginBottom: "4px", marginTop: "6px" }}>回饋紅利</div>
+            <div style={{ fontSize: "11px", color: "#888" }}>好友每儲值 100U，您獲得 10U 回饋</div>
           </div>
-          <div style={{ flex: 1, textAlign: "center", background: "rgba(0,191,255,0.1)", borderRadius: "12px", padding: "16px", border: "1px solid rgba(0,191,255,0.3)" }}>
-            <div style={{ fontSize: "36px", fontWeight: "900", color: "#00BFFF" }}>3%</div>
-            <div style={{ fontSize: "13px", color: "#00BFFF", fontWeight: "bold", marginBottom: "4px" }}>二級佣金</div>
-            <div style={{ fontSize: "11px", color: "#888" }}>好友的好友首充的 3%</div>
-          </div>
+        </div>
+        <div style={{ marginTop: "12px", background: "rgba(255,165,0,0.08)", borderRadius: "10px", padding: "10px 14px", border: "1px solid rgba(255,165,0,0.2)", fontSize: "12px", color: "#FFA500", textAlign: "center" }}>
+          🔒 回饋紅利帶 5 倍流水要求 · 次日自動發放
         </div>
       </div>
 
@@ -81,7 +82,7 @@ export default function ReferralPage() {
             </div>
             <div style={{ flex: 1, textAlign: "center", background: "rgba(255,255,255,0.03)", borderRadius: "10px", padding: "12px", border: "1px solid rgba(255,255,255,0.06)" }}>
               <div style={{ fontSize: "24px", fontWeight: "bold", color: "#00BFFF" }}>{(referral.invite_earnings || 0).toFixed(2)}</div>
-              <div style={{ fontSize: "11px", color: "#888" }}>累計佣金 (U)</div>
+              <div style={{ fontSize: "11px", color: "#888" }}>累計回饋紅利 (U)</div>
             </div>
           </div>
         </div>
@@ -94,12 +95,12 @@ export default function ReferralPage() {
 
       {/* How it works */}
       <div style={cardStyle}>
-        <h3 style={{ fontSize: "16px", fontWeight: "bold", color: "#FFD700", marginBottom: "12px" }}>📋 如何賺取佣金</h3>
+        <h3 style={{ fontSize: "16px", fontWeight: "bold", color: "#FFD700", marginBottom: "12px" }}>📋 如何賺取回饋紅利</h3>
         {[
           { step: "1", title: "複製邀請連結", desc: "複製您的專屬 TG 邀請連結或邀請碼" },
-          { step: "2", title: "分享給好友", desc: "發送給朋友，讓他們通過您的連結加入" },
-          { step: "3", title: "好友首充", desc: "好友完成首次儲值後，佣金自動計算" },
-          { step: "4", title: "佣金到帳", desc: "直推 15% 佣金即時到帳，無需申請" },
+          { step: "2", title: "分享給好友", desc: "發送給朋友，讓他們透過您的連結加入" },
+          { step: "3", title: "好友完成儲值", desc: "好友透過邀請碼註冊並儲值成功" },
+          { step: "4", title: "次日自動發放回饋紅利", desc: "好友每儲值 100U，您獲得 10U 回饋紅利，次日自動到帳" },
         ].map((item) => (
           <div key={item.step} style={{ display: "flex", gap: "12px", marginBottom: "12px", alignItems: "flex-start" }}>
             <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "linear-gradient(135deg, #FFD700, #FFA500)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "13px", fontWeight: "bold", color: "#000" }}>{item.step}</div>
@@ -115,11 +116,12 @@ export default function ReferralPage() {
       <div style={cardStyle}>
         <h3 style={{ fontSize: "16px", fontWeight: "bold", color: "#FFD700", marginBottom: "12px" }}>📜 活動規則</h3>
         {[
-          "佣金按好友首充金額計算，直推 15%，二級 3%",
-          "佣金即時到帳，無最低提取限制",
-          "邀請佣金永久有效，好友每次首充均計算",
+          "好友透過邀請碼註冊並儲值成功，每 100U 即返 10U 回饋紅利",
+          "回饋紅利於次日由系統自動發放，無需手動申請",
+          "回饋紅利帶 5 倍流水要求（例：獲得 10U → 需完成 50U 流水後方可提款）",
+          "邀請人數無上限，長期有效",
           "禁止自我邀請、多帳號套利等違規行為",
-          "違規帳號將被封禁並取消所有佣金",
+          "違規帳號將被封禁並取消所有回饋紅利",
           "LA1 保留本活動最終解釋權",
         ].map((rule, i) => (
           <div key={i} style={{ display: "flex", gap: "8px", marginBottom: "8px", fontSize: "13px", color: "#aaa", lineHeight: "1.5" }}>

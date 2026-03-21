@@ -11,7 +11,7 @@ const ACTIVITIES = [
     id: "first-deposit",
     icon: "🎁",
     title: "首充豪禮",
-    subtitle: "充 100 送 38 · 充 30 送 10",
+    subtitle: "儲值 500U 送 165U · 33% 加碼",
     desc: "新會員專屬，首次儲值即享豐厚獎勵",
     badge: "HOT",
     badgeColor: "#FF4500",
@@ -33,8 +33,8 @@ const ACTIVITIES = [
     id: "referral",
     icon: "🤝",
     title: "邀請返傭",
-    subtitle: "直推 15% · 二級 3%",
-    desc: "邀請好友永久佣金，無上限無時限",
+    subtitle: "每 100U 返 10U · 回饋紅利",
+    desc: "邀請好友賺取回饋紅利，邀請人數無上限",
     badge: "永久",
     badgeColor: "#00BFFF",
     gradient: "linear-gradient(135deg, rgba(0,191,255,0.12), rgba(30,144,255,0.06))",
@@ -201,12 +201,12 @@ export default function ActivityPage() {
               {act.id === "referral" && (
                 <div style={{ marginTop: "10px", display: "flex", gap: "10px" }}>
                   <div style={{ flex: 1, textAlign: "center", background: "rgba(255,215,0,0.1)", borderRadius: "10px", padding: "8px", border: "1px solid rgba(255,215,0,0.2)" }}>
-                    <div style={{ fontSize: "20px", fontWeight: "bold", color: "#FFD700" }}>15%</div>
-                    <div style={{ fontSize: "10px", color: "#888" }}>直推佣金</div>
+                    <div style={{ fontSize: "14px", fontWeight: "bold", color: "#FFD700" }}>每 100U 返 10U</div>
+                    <div style={{ fontSize: "10px", color: "#888" }}>回饋紅利</div>
                   </div>
                   <div style={{ flex: 1, textAlign: "center", background: "rgba(0,191,255,0.1)", borderRadius: "10px", padding: "8px", border: "1px solid rgba(0,191,255,0.2)" }}>
-                    <div style={{ fontSize: "20px", fontWeight: "bold", color: "#00BFFF" }}>3%</div>
-                    <div style={{ fontSize: "10px", color: "#888" }}>二級佣金</div>
+                    <div style={{ fontSize: "14px", fontWeight: "bold", color: "#00BFFF" }}>5倍流水</div>
+                    <div style={{ fontSize: "10px", color: "#888" }}>次日自動發放</div>
                   </div>
                 </div>
               )}

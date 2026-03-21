@@ -116,6 +116,9 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
 3️⃣ 直接開始
 4️⃣ 聯繫客服
 
+🎁 新會員首充優惠：儲值 500 USDT 送 165 USDT（33% 加碼）
+🔐 安全提示：請到「我的」→「安全中心」設定備用帳號密碼
+
 👇 輸入數字或點擊指令`, { parse_mode: "HTML" });
 
   db.run("UPDATE leads SET status='talking' WHERE tg_id=?", [chatId.toString()]);
@@ -256,7 +259,7 @@ bot.onText(/\/invite/, async (msg) => {
     const webLink = `${SITE_URL}?ref=${user.invite_code}`;
 
     bot.sendMessage(chatId,
-`🤝 <b>邀請好友，賺取永久佣金！</b>
+`🤝 <b>邀請好友，賺取回饋紅利！</b>
 
 📌 <b>您的邀請碼：</b><code>${user.invite_code}</code>
 
@@ -266,15 +269,17 @@ ${tgLink}
 🌐 <b>邀請連結（網頁）：</b>
 ${webLink}
 
-💰 <b>佣金規則：</b>
-├ 直推好友首充：<b>15%</b> 佣金
-└ 二級好友首充：<b>3%</b> 佣金
+💰 <b>回饋紅利規則：</b>
+好友透過邀請碼註冊並儲值成功
+每 <b>100U</b> 即返 <b>10U</b> 回饋紅利
+次日自動發放 · 帶 5 倍流水要求
+邀請人數無上限，長期有效
 
 📊 <b>邀請統計：</b>
 ├ 已邀請人數：<b>${user.invite_count || 0}</b> 人
-└ 累計佣金：<b>${(user.invite_earnings || 0).toFixed(2)} USDT</b>
+└ 累計回饋紅利：<b>${(user.invite_earnings || 0).toFixed(2)} USDT</b>
 
-💡 把邀請連結分享給好友，好友首充後佣金自動到帳！`, { parse_mode: "HTML" });
+💡 把邀請連結分享給好友，好友儲值後次日自動發放回饋紅利！`, { parse_mode: "HTML" });
 
   } catch (e) {
     bot.sendMessage(chatId, "❌ 查詢失敗，請稍後再試");
@@ -295,11 +300,11 @@ bot.onText(/\/bonus/, async (msg) => {
 
     // 1. First deposit bonus
     if (!user.first_deposit_claimed) {
-      if ((user.total_deposit || 0) >= 30) {
-        bonusList += "🎁 <b>首充獎勵</b> — 可領取！\n   充 100 送 38 / 充 30 送 10\n   👉 前往網站領取\n\n";
+      if ((user.total_deposit || 0) >= 500) {
+        bonusList += "🎁 <b>首充獎勵</b> — 可領取！\n   儲值 500 USDT 送 165 USDT（33% 加碼）\n   👉 前往網站領取\n\n";
         count++;
       } else {
-        bonusList += "🎁 <b>首充獎勵</b> — 未達條件\n   需先完成首次儲值（最低 30U）\n\n";
+        bonusList += "🎁 <b>首充獎勵</b> — 未達條件\n   需先完成首次儲值（最低 500 USDT）\n\n";
       }
     } else {
       bonusList += "✅ <b>首充獎勵</b> — 已領取\n\n";
