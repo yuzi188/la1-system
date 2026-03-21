@@ -1,0 +1,6 @@
+[DB] Unified DB instance — path: ./db.sqlite
+LA1 Backend v5.0 running on port 3001
+[PushJob] Scheduled — every 1 hour
+[PushJob] Starting push scan...
+[DB] Daily push counts reset for date: 2026-03-21
+[PushJob] Done — sent: 0, skipped: 0, total users: 0, time: 0.0s

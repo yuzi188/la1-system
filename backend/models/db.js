@@ -96,6 +96,43 @@ function initSchema() {
     db.run(`ALTER TABLE users ADD COLUMN ${col}`, () => {});
   });
 
+  // Feature #13: admins table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS admins (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT DEFAULT 'operator', -- super_admin, operator, support
+      status TEXT DEFAULT 'active', -- active, disabled
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_login DATETIME,
+      created_by TEXT
+    )`,
+    () => {
+      // Seed default super admin: LA188YU / LA1admin888
+      const bcrypt = require("bcryptjs");
+      const salt = bcrypt.genSaltSync(10);
+      const hash = bcrypt.hashSync("LA1admin888", salt);
+      db.run(
+        "INSERT OR IGNORE INTO admins (username, password_hash, role, created_by) VALUES (?, ?, ?, ?)",
+        ["LA188YU", hash, "super_admin", "system"]
+      );
+    }
+  );
+
+  // Feature #14: admin_logs table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS admin_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      admin_id INTEGER,
+      action TEXT,
+      target TEXT,
+      details TEXT,
+      ip TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  );
+
   // Feature #6: message_templates table
   db.run(
     `CREATE TABLE IF NOT EXISTS message_templates (

@@ -279,8 +279,30 @@ function adminAuth(req) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : header;
   const payload = jwt.verify(token, ADMIN_JWT_SECRET);
-  if (payload.role !== "admin") throw new Error("Not admin");
+  // payload should contain { id, username, role }
+  if (!payload.role) throw new Error("Not admin");
   return payload;
+}
+
+// Role-based access control middleware
+const checkRole = (roles) => (req, res, next) => {
+  try {
+    const admin = adminAuth(req);
+    if (!roles.includes(admin.role)) {
+      return res.status(403).json({ error: "權限不足" });
+    }
+    req.admin = admin;
+    next();
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+};
+
+// Helper to log admin actions
+async function logAdminAction(adminId, action, target, details, req) {
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  await dbRun("INSERT INTO admin_logs (admin_id, action, target, details, ip) VALUES (?, ?, ?, ?, ?)",
+    [adminId, action, target, JSON.stringify(details), ip]);
 }
 
 // Feature #4: TG helpers wrapped in try/catch (never throw)
@@ -380,23 +402,138 @@ function verifyTelegramInitData(initData, botToken) {
 // ADMIN AUTH
 // ══════════════════════════════════════════════════════════════════════════════
 
-app.post("/admin/login", adminLimiter, (req, res) => {
-  const { password } = req.body;
-  if (!password) return res.status(400).json({ error: "請輸入密碼" });
-  if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: "密碼錯誤" });
-  const token = jwt.sign({ role: "admin", ts: Date.now() }, ADMIN_JWT_SECRET, { expiresIn: "8h" });
-  res.json({ token, ok: true });
+app.post("/admin/login", adminLimiter, async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "請輸入帳號和密碼" });
+
+  try {
+    const admin = await dbGet("SELECT * FROM admins WHERE username = ?", [username]);
+    if (!admin) return res.status(401).json({ error: "帳號或密碼錯誤" });
+    if (admin.status === "disabled") return res.status(403).json({ error: "帳號已被停用" });
+
+    const match = await bcrypt.compare(password, admin.password_hash);
+    if (!match) return res.status(401).json({ error: "帳號或密碼錯誤" });
+
+    const token = jwt.sign(
+      { id: admin.id, username: admin.username, role: admin.role, ts: Date.now() },
+      ADMIN_JWT_SECRET,
+      { expiresIn: "8h" }
+    );
+
+    await dbRun("UPDATE admins SET last_login = datetime('now') WHERE id = ?", [admin.id]);
+    await logAdminAction(admin.id, "login", "admin", { username: admin.username }, req);
+
+    res.json({ token, role: admin.role, username: admin.username, ok: true });
+  } catch (e) {
+    res.status(500).json({ error: "登入失敗" });
+  }
 });
 
-app.get("/admin/users", adminLimiter, async (req, res) => {
-  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+// Admin Management (super_admin only)
+app.get("/admin/admins", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
+  try {
+    const admins = await dbAll("SELECT id, username, role, status, created_at, last_login, created_by FROM admins ORDER BY created_at DESC");
+    res.json(admins);
+  } catch (e) {
+    res.status(500).json({ error: "查詢失敗" });
+  }
+});
+
+app.post("/admin/admins", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
+  const { username, password, role } = req.body;
+  if (!username || !password || !role) return res.status(400).json({ error: "缺少必要參數" });
+  if (!["super_admin", "operator", "support"].includes(role)) return res.status(400).json({ error: "無效的角色" });
+
+  try {
+    const salt = await bcrypt.genSalt(10);
+    const hash = await bcrypt.hash(password, salt);
+    await dbRun("INSERT INTO admins (username, password_hash, role, created_by) VALUES (?, ?, ?, ?)",
+      [username, hash, role, req.admin.username]);
+    await logAdminAction(req.admin.id, "create_admin", "admin", { target_username: username, role }, req);
+    res.json({ ok: true, message: "管理員創建成功" });
+  } catch (e) {
+    if (e.message.includes("UNIQUE")) return res.status(400).json({ error: "帳號已存在" });
+    res.status(500).json({ error: "創建失敗" });
+  }
+});
+
+app.put("/admin/admins/:id", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
+  const { id } = req.params;
+  const { password, role, status } = req.body;
+
+  try {
+    const admin = await dbGet("SELECT * FROM admins WHERE id = ?", [id]);
+    if (!admin) return res.status(404).json({ error: "管理員不存在" });
+
+    let sql = "UPDATE admins SET ";
+    const params = [];
+    const updates = [];
+
+    if (password) {
+      const salt = await bcrypt.genSalt(10);
+      const hash = await bcrypt.hash(password, salt);
+      updates.push("password_hash = ?");
+      params.push(hash);
+    }
+    if (role) {
+      updates.push("role = ?");
+      params.push(role);
+    }
+    if (status) {
+      updates.push("status = ?");
+      params.push(status);
+    }
+
+    if (updates.length === 0) return res.status(400).json({ error: "無更新內容" });
+
+    sql += updates.join(", ") + " WHERE id = ?";
+    params.push(id);
+
+    await dbRun(sql, params);
+    await logAdminAction(req.admin.id, "update_admin", "admin", { target_id: id, updates: Object.keys(req.body) }, req);
+    res.json({ ok: true, message: "更新成功" });
+  } catch (e) {
+    res.status(500).json({ error: "更新失敗" });
+  }
+});
+
+app.delete("/admin/admins/:id", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
+  const { id } = req.params;
+  if (parseInt(id) === req.admin.id) return res.status(400).json({ error: "不能刪除自己" });
+
+  try {
+    const admin = await dbGet("SELECT * FROM admins WHERE id = ?", [id]);
+    if (!admin) return res.status(404).json({ error: "管理員不存在" });
+
+    await dbRun("DELETE FROM admins WHERE id = ?", [id]);
+    await logAdminAction(req.admin.id, "delete_admin", "admin", { target_id: id, target_username: admin.username }, req);
+    res.json({ ok: true, message: "刪除成功" });
+  } catch (e) {
+    res.status(500).json({ error: "刪除失敗" });
+  }
+});
+
+app.get("/admin/logs", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
+  try {
+    const logs = await dbAll(`
+      SELECT al.*, a.username as admin_username 
+      FROM admin_logs al 
+      LEFT JOIN admins a ON al.admin_id = a.id 
+      ORDER BY al.created_at DESC LIMIT 500
+    `);
+    res.json(logs);
+  } catch (e) {
+    res.status(500).json({ error: "查詢失敗" });
+  }
+});
+
+app.get("/admin/users", adminLimiter, checkRole(["super_admin", "operator"]), async (req, res) => {
   const q = req.query.q ? `%${req.query.q}%` : null;
   const sql = q
     ? `SELECT * FROM users WHERE username LIKE ? OR tg_id LIKE ? OR tg_username LIKE ? OR tg_first_name LIKE ? ORDER BY created_at DESC`
     : `SELECT * FROM users ORDER BY created_at DESC`;
   const params = q ? [q, q, q, q] : [];
   db.all(sql, params, (e, rows) => {
-    // Include banned status in response
     const users = (rows || []).map(u => ({
       ...u,
       banned: u.banned || 0,
@@ -568,8 +705,7 @@ app.post("/admin/review-withdrawal", adminLimiter, async (req, res) => {
 });
 
 // Feature #12: Admin calculate rebate
-app.post("/admin/calculate-rebate", adminLimiter, async (req, res) => {
-  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+app.post("/admin/calculate-rebate", adminLimiter, checkRole(["super_admin", "operator"]), async (req, res) => {
   try {
     const today = getToday();
     const period = req.body.period || today;
@@ -615,7 +751,7 @@ app.post("/admin/calculate-rebate", adminLimiter, async (req, res) => {
       await dbRun("INSERT INTO rebate_logs (user_id, amount, vip_level, bet_amount, period) VALUES (?, ?, ?, ?, ?)",
         [user.id, rebateAmount, vipLevel, periodBet, period]);
       await dbRun("INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
-        [user.id, "add", rebateAmount, `VIP${vipLevel} 返水（投注 ${periodBet.toFixed(2)}，比例 ${(rebateRate * 100).toFixed(2)}%）`, "system"]);
+        [user.id, "add", rebateAmount, `VIP${vipLevel} 返水（投注 ${periodBet.toFixed(2)}，比例 ${(rebateRate * 100).toFixed(2)}%）`, req.admin.username]);
 
       // Notify user
       if (user.tg_id) {
@@ -627,6 +763,7 @@ app.post("/admin/calculate-rebate", adminLimiter, async (req, res) => {
     }
 
     sendTG(`📊 返水結算完成 | 期間: ${period} | 人數: ${processedCount} | 總額: ${totalRebate.toFixed(2)} USDT`);
+    logAdminAction(req.admin.id, "calculate_rebate", "system", { period, processedCount, totalRebate }, req);
     res.json({ ok: true, period, processedCount, totalRebate: totalRebate.toFixed(2) });
   } catch (e) {
     console.error("Calculate rebate error:", e);
@@ -1952,8 +2089,7 @@ app.post("/start-push", async (req, res) => {
 // ADMIN: MESSAGE TEMPLATES CRUD
 // ══════════════════════════════════════════════════════════════════════════════
 
-app.get("/admin/templates", adminLimiter, async (req, res) => {
-  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+app.get("/admin/templates", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
   try {
     const rows = await dbAll("SELECT * FROM message_templates ORDER BY trigger, lang");
     res.json(rows);
@@ -1962,8 +2098,7 @@ app.get("/admin/templates", adminLimiter, async (req, res) => {
   }
 });
 
-app.post("/admin/templates", adminLimiter, async (req, res) => {
-  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+app.post("/admin/templates", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
   const { trigger, content, lang } = req.body;
   if (!trigger || !content) return res.status(400).json({ error: "缺少 trigger 或 content" });
   try {
@@ -1972,16 +2107,17 @@ app.post("/admin/templates", adminLimiter, async (req, res) => {
        ON CONFLICT(trigger, lang) DO UPDATE SET content = ?`,
       [trigger, content, lang || "zh", content]
     );
+    logAdminAction(req.admin.id, "save_template", "template", { trigger, lang }, req);
     res.json({ ok: true, message: "模板已儲存" });
   } catch (e) {
     res.status(500).json({ error: "儲存失敗" });
   }
 });
 
-app.delete("/admin/templates/:id", adminLimiter, async (req, res) => {
-  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+app.delete("/admin/templates/:id", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
   try {
     await dbRun("DELETE FROM message_templates WHERE id = ?", [req.params.id]);
+    logAdminAction(req.admin.id, "delete_template", "template", { id: req.params.id }, req);
     res.json({ ok: true, message: "模板已刪除" });
   } catch (e) {
     res.status(500).json({ error: "刪除失敗" });
