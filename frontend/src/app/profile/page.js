@@ -9,6 +9,7 @@ const CHECKIN_REWARDS = [0.5, 0.5, 1, 1, 1.5, 1.5, 3];
 export default function ProfilePage() {
   const router = useRouter();
   const [user, setUser] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
   const [vip, setVip] = useState(null);
   const [referral, setReferral] = useState(null);
   const [checkin, setCheckin] = useState(null);
@@ -24,13 +25,15 @@ export default function ProfilePage() {
   async function fetchAll(token) {
     const headers = { Authorization: `Bearer ${token}` };
     try {
-      const [me, v, r, c] = await Promise.all([
+      const [me, prof, v, r, c] = await Promise.all([
         fetch(`${API}/me`, { headers }).then(r => r.json()).catch(() => null),
+        fetch(`${API}/api/user/profile`, { headers }).then(r => r.json()).catch(() => null),
         fetch(`${API}/promo/vip-info`, { headers }).then(r => r.json()).catch(() => null),
         fetch(`${API}/promo/referral-info`, { headers }).then(r => r.json()).catch(() => null),
         fetch(`${API}/promo/checkin-status`, { headers }).then(r => r.json()).catch(() => null),
       ]);
       if (me && !me.error) setUser(me);
+      if (prof && !prof.error) setUserProfile(prof);
       setVip(v); setReferral(r); setCheckin(c);
     } catch (e) {}
     setLoading(false);
@@ -99,34 +102,45 @@ export default function ProfilePage() {
       )}
 
       {/* ── 頭像 + 基本資訊 ── */}
-      <div style={{ ...cardStyle, textAlign: "center", background: "linear-gradient(180deg, rgba(255,215,0,0.08), rgba(0,0,0,0.6))" }}>
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "-10px" }}>
-          <button onClick={handleLogout} style={{ background: "rgba(255,68,68,0.1)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: "20px", color: "#ff6666", padding: "4px 12px", cursor: "pointer", fontSize: "11px" }}>登出</button>
-        </div>
-        <div style={{
-          width: "72px", height: "72px", borderRadius: "50%",
-          background: "linear-gradient(135deg, #FFD700, #D4AF37)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: "32px", margin: "0 auto 12px",
-          boxShadow: "0 0 25px rgba(255,215,0,0.4)", color: "#000", fontWeight: "900",
-        }}>
-          {user.first_name ? user.first_name.charAt(0).toUpperCase() : "👤"}
-        </div>
-        <h2 style={{ fontSize: "18px", color: "#fff", marginBottom: "4px" }}>
-          {user.first_name || user.username}
-        </h2>
-        {user.tg_id && (
-          <p style={{ fontSize: "12px", color: "#888", marginBottom: "8px" }}>@{user.username} | TG ID: {user.tg_id}</p>
-        )}
-        <div style={{
-          display: "inline-block", padding: "4px 16px",
-          background: vipLevel > 0 ? "linear-gradient(135deg, #FFD700, #FF8C00)" : "rgba(255,255,255,0.1)",
-          borderRadius: "20px", color: vipLevel > 0 ? "#000" : "#888",
-          fontSize: "12px", fontWeight: "bold",
-        }}>
-          👑 {vipName}
-        </div>
-      </div>
+      {(() => {
+        // Priority: custom avatar > default initial circle
+        const customAvatar = userProfile?.avatar || "";
+        // Priority: custom nickname > TG display name
+        const displayName = userProfile?.nickname || user.first_name || user.username || "";
+        return (
+          <div style={{ ...cardStyle, textAlign: "center", background: "linear-gradient(180deg, rgba(255,215,0,0.08), rgba(0,0,0,0.6))" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "-10px" }}>
+              <button onClick={handleLogout} style={{ background: "rgba(255,68,68,0.1)", border: "1px solid rgba(255,68,68,0.3)", borderRadius: "20px", color: "#ff6666", padding: "4px 12px", cursor: "pointer", fontSize: "11px" }}>登出</button>
+            </div>
+            <div style={{
+              width: "72px", height: "72px", borderRadius: "50%",
+              background: customAvatar ? "transparent" : "linear-gradient(135deg, #FFD700, #D4AF37)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "32px", margin: "0 auto 12px",
+              boxShadow: "0 0 25px rgba(255,215,0,0.4)", color: "#000", fontWeight: "900",
+              overflow: "hidden",
+            }}>
+              {customAvatar
+                ? <img src={customAvatar} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                : (displayName ? displayName.charAt(0).toUpperCase() : "👤")}
+            </div>
+            <h2 style={{ fontSize: "18px", color: "#fff", marginBottom: "4px" }}>
+              {displayName}
+            </h2>
+            {user.tg_id && (
+              <p style={{ fontSize: "12px", color: "#888", marginBottom: "8px" }}>@{user.username} | TG ID: {user.tg_id}</p>
+            )}
+            <div style={{
+              display: "inline-block", padding: "4px 16px",
+              background: vipLevel > 0 ? "linear-gradient(135deg, #FFD700, #FF8C00)" : "rgba(255,255,255,0.1)",
+              borderRadius: "20px", color: vipLevel > 0 ? "#000" : "#888",
+              fontSize: "12px", fontWeight: "bold",
+            }}>
+              👑 {vipName}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── 餘額卡片 ── */}
       <div style={{ ...cardStyle, background: "linear-gradient(135deg, rgba(255,215,0,0.1), rgba(0,191,255,0.05))" }}>

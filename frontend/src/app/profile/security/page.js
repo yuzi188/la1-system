@@ -22,6 +22,13 @@ export default function SecurityPage() {
   const [avatarSaving, setAvatarSaving] = useState(false);
   const fileInputRef = useRef(null);
 
+  // Backup login state
+  const [backupUsername, setBackupUsername] = useState("");
+  const [backupPassword, setBackupPassword] = useState("");
+  const [backupConfirmPassword, setBackupConfirmPassword] = useState("");
+  const [backupMsg, setBackupMsg] = useState("");
+  const [backupSaving, setBackupSaving] = useState(false);
+
   // Toast
   const [toast, setToast] = useState("");
 
@@ -45,6 +52,7 @@ export default function SecurityPage() {
           setProfile(data);
           setNickname(data.nickname || "");
           setAvatarPreview(data.avatar || "");
+          if (data.backup_username) setBackupUsername(data.backup_username);
         }
         setLoading(false);
       })
@@ -535,6 +543,154 @@ export default function SecurityPage() {
             {avatarSaving ? "儲存中..." : "💾 儲存頭像"}
           </button>
         )}
+      </div>
+
+      {/* ── Section 3: 設定備用帳號密碼 ── */}
+      <div style={cardStyle}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            marginBottom: "16px",
+          }}
+        >
+          <div
+            style={{
+              width: "36px",
+              height: "36px",
+              borderRadius: "50%",
+              background: "rgba(0,255,136,0.12)",
+              border: "1px solid rgba(0,255,136,0.3)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "16px",
+            }}
+          >
+            🔑
+          </div>
+          <div>
+            <h3 style={{ fontSize: "15px", fontWeight: "bold", color: "#FFD700", margin: 0 }}>
+              設定備用帳號密碼
+            </h3>
+            <p style={{ fontSize: "11px", color: "#666", margin: "2px 0 0" }}>
+              當 TG 帳號遺失時，可用備用帳號登入
+            </p>
+          </div>
+        </div>
+
+        {/* Current backup username display */}
+        {profile?.has_backup_login && (
+          <div
+            style={{
+              background: "rgba(0,255,136,0.06)",
+              border: "1px solid rgba(0,255,136,0.2)",
+              borderRadius: "10px",
+              padding: "10px 14px",
+              marginBottom: "14px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span style={{ fontSize: "12px", color: "#888" }}>目前備用帳號</span>
+            <span style={{ fontSize: "14px", fontWeight: "bold", color: "#00FF88" }}>
+              {profile?.backup_username}
+            </span>
+          </div>
+        )}
+
+        <div style={{ marginBottom: "10px" }}>
+          <label style={{ fontSize: "12px", color: "#888", display: "block", marginBottom: "6px" }}>帳號（3~30 個字元）</label>
+          <input
+            type="text"
+            value={backupUsername}
+            onChange={(e) => setBackupUsername(e.target.value)}
+            placeholder="設定備用登入帳號"
+            maxLength={30}
+            style={inputStyle}
+          />
+        </div>
+
+        <div style={{ marginBottom: "10px" }}>
+          <label style={{ fontSize: "12px", color: "#888", display: "block", marginBottom: "6px" }}>密碼（至少 6 個字元）</label>
+          <input
+            type="password"
+            value={backupPassword}
+            onChange={(e) => setBackupPassword(e.target.value)}
+            placeholder="設定備用登入密碼"
+            style={inputStyle}
+          />
+        </div>
+
+        <div style={{ marginBottom: "14px" }}>
+          <label style={{ fontSize: "12px", color: "#888", display: "block", marginBottom: "6px" }}>確認密碼</label>
+          <input
+            type="password"
+            value={backupConfirmPassword}
+            onChange={(e) => setBackupConfirmPassword(e.target.value)}
+            placeholder="再次輸入密碼"
+            style={inputStyle}
+          />
+        </div>
+
+        {backupMsg && (
+          <div
+            style={{
+              fontSize: "13px",
+              color: backupMsg.startsWith("✅") ? "#4CAF50" : "#FF6347",
+              marginBottom: "10px",
+              fontWeight: "bold",
+            }}
+          >
+            {backupMsg}
+          </div>
+        )}
+
+        <button
+          onClick={async () => {
+            if (!backupUsername.trim()) { setBackupMsg("❌ 請輸入備用帳號"); return; }
+            if (backupUsername.trim().length < 3 || backupUsername.trim().length > 30) { setBackupMsg("❌ 帳號長度需在 3~30 個字元之間"); return; }
+            if (!backupPassword || backupPassword.length < 6) { setBackupMsg("❌ 密碼至少需要 6 個字元"); return; }
+            if (backupPassword !== backupConfirmPassword) { setBackupMsg("❌ 兩次輸入的密碼不一致"); return; }
+            const token = localStorage.getItem("la1_token");
+            if (!token) return;
+            setBackupSaving(true);
+            setBackupMsg("");
+            try {
+              const res = await fetch(`${API}/api/user/backup-login`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ backup_username: backupUsername.trim(), backup_password: backupPassword }),
+              });
+              const data = await res.json();
+              if (data.ok) {
+                setProfile((prev) => ({ ...prev, backup_username: data.backup_username, has_backup_login: true }));
+                setBackupPassword("");
+                setBackupConfirmPassword("");
+                setBackupMsg("✅ 備用帳號密碼已設定");
+                showToast("✅ 備用帳號密碼設定成功！");
+              } else {
+                setBackupMsg("❌ " + (data.error || "設定失敗"));
+              }
+            } catch {
+              setBackupMsg("❌ 網路錯誤，請稍後再試");
+            }
+            setBackupSaving(false);
+          }}
+          disabled={backupSaving}
+          style={backupSaving
+            ? { ...btnDisabledStyle, width: "100%" }
+            : { ...btnPrimaryStyle, width: "100%", background: "linear-gradient(135deg, #00FF88, #00CC66)", color: "#000" }
+          }
+        >
+          {backupSaving ? "儲存中..." : (profile?.has_backup_login ? "🔄 更新備用帳號密碼" : "🔑 設定備用帳號密碼")}
+        </button>
+
+        <div style={{ fontSize: "11px", color: "#666", marginTop: "10px", lineHeight: "1.5" }}>
+          ⚠️ 備用帳號可隨時更改。請妙善保管帳號密碼，勿與他人分享。
+        </div>
       </div>
     </div>
   );

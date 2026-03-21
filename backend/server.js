@@ -918,8 +918,18 @@ app.post("/login", loginLimiter, async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: "請輸入用戶名和密碼" });
 
-  db.get("SELECT * FROM users WHERE username=?", [username], async (e, u) => {
-    if (!u || !u.password) return res.json({ error: "帳號或密碼錯誤" });
+  // Support backup_username login as well
+  db.get(
+    "SELECT * FROM users WHERE username = ? OR (backup_username != '' AND backup_username = ?)",
+    [username, username],
+    async (e, u) => {
+    if (!u) return res.json({ error: "帳號或密碼錯誤" });
+
+    // Determine which password field to check
+    // If the user logged in via backup_username, use backup_password; otherwise use password
+    const isBackupLogin = u.backup_username && u.backup_username === username;
+    const storedPassword = isBackupLogin ? u.backup_password : u.password;
+    if (!storedPassword) return res.json({ error: "帳號或密碼錯誤" });
 
     // Feature #8: Check if user is banned
     if (u.banned) {
@@ -930,13 +940,13 @@ app.post("/login", loginLimiter, async (req, res) => {
     let passwordMatch = false;
 
     // Check if password is bcrypt hashed (starts with $2a$ or $2b$)
-    if (u.password.startsWith("$2a$") || u.password.startsWith("$2b$")) {
-      passwordMatch = await bcrypt.compare(password, u.password);
+    if (storedPassword.startsWith("$2a$") || storedPassword.startsWith("$2b$")) {
+      passwordMatch = await bcrypt.compare(password, storedPassword);
     } else {
       // Legacy plaintext password comparison
-      passwordMatch = (u.password === password);
-      // Auto-upgrade: hash the plaintext password
-      if (passwordMatch) {
+      passwordMatch = (storedPassword === password);
+      // Auto-upgrade: hash the plaintext password (only for main password field)
+      if (passwordMatch && !isBackupLogin) {
         try {
           const hashedPassword = await bcrypt.hash(password, 10);
           db.run("UPDATE users SET password = ? WHERE id = ?", [hashedPassword, u.id]);
@@ -2242,23 +2252,25 @@ app.get("/api/transactions", async (req, res) => {
 // SECURITY CENTER — NICKNAME & AVATAR
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Ensure nickname and avatar columns exist (safe ALTER TABLE pattern)
+// Ensure nickname, avatar, and backup-login columns exist (safe ALTER TABLE pattern)
 db.serialize(() => {
   const securityCols = [
     "nickname TEXT DEFAULT ''",
     "nickname_changed INTEGER DEFAULT 0",
     "avatar TEXT DEFAULT ''",
+    "backup_username TEXT DEFAULT ''",
+    "backup_password TEXT DEFAULT ''",
   ];
   securityCols.forEach(col => {
     db.run(`ALTER TABLE users ADD COLUMN ${col}`, () => {});
   });
 });
 
-// GET /api/user/profile — Returns current nickname and avatar
+// GET /api/user/profile — Returns current nickname, avatar, and backup-login status
 app.get("/api/user/profile", async (req, res) => {
   try {
     const u = auth(req);
-    const user = await dbGet("SELECT id, tg_first_name, tg_username, username, nickname, nickname_changed, avatar FROM users WHERE id = ?", [u.id]);
+    const user = await dbGet("SELECT id, tg_first_name, tg_username, username, nickname, nickname_changed, avatar, backup_username FROM users WHERE id = ?", [u.id]);
     if (!user) return res.status(404).json({ error: "用戶不存在" });
     res.json({
       id: user.id,
@@ -2266,6 +2278,8 @@ app.get("/api/user/profile", async (req, res) => {
       nickname: user.nickname || "",
       nickname_changed: user.nickname_changed || 0,
       avatar: user.avatar || "",
+      backup_username: user.backup_username || "",
+      has_backup_login: !!(user.backup_username && user.backup_username.trim()),
     });
   } catch (e) {
     res.status(401).json({ error: "未授權" });
@@ -2287,6 +2301,43 @@ app.put("/api/user/nickname", async (req, res) => {
 
     await dbRun("UPDATE users SET nickname = ?, nickname_changed = 1 WHERE id = ?", [trimmed, u.id]);
     res.json({ ok: true, nickname: trimmed, message: "暱稱已更新" });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// PUT /api/user/backup-login — Set or update backup username + password
+app.put("/api/user/backup-login", async (req, res) => {
+  try {
+    const u = auth(req);
+    const { backup_username, backup_password } = req.body;
+
+    if (!backup_username || !backup_username.trim()) {
+      return res.status(400).json({ error: "請輸入備用帳號" });
+    }
+    if (!backup_password || backup_password.length < 6) {
+      return res.status(400).json({ error: "密碼至少需要 6 個字元" });
+    }
+    const trimmedUsername = backup_username.trim();
+    if (trimmedUsername.length < 3 || trimmedUsername.length > 30) {
+      return res.status(400).json({ error: "帳號長度需在 3~30 個字元之間" });
+    }
+
+    // Check if backup_username is already taken by another user
+    const existing = await dbGet(
+      "SELECT id FROM users WHERE backup_username = ? AND id != ?",
+      [trimmedUsername, u.id]
+    );
+    if (existing) {
+      return res.status(400).json({ error: "此備用帳號已被使用，請換一個" });
+    }
+
+    const hashedPassword = await bcrypt.hash(backup_password, 10);
+    await dbRun(
+      "UPDATE users SET backup_username = ?, backup_password = ? WHERE id = ?",
+      [trimmedUsername, hashedPassword, u.id]
+    );
+    res.json({ ok: true, backup_username: trimmedUsername, message: "備用帳號密碼已設定" });
   } catch (e) {
     res.status(401).json({ error: "未授權" });
   }
@@ -2338,6 +2389,7 @@ app.get("/", (req, res) => res.json({
     "/api/user/profile",
     "/api/user/nickname",
     "/api/user/avatar",
+    "/api/user/backup-login",
     // Agent/Partner system (default OFF via feature flag)
     "/agent/dashboard", "/agent/referrals", "/agent/commissions",
     "/admin/agents", "/admin/agents/toggle", "/admin/agents/settlements",
