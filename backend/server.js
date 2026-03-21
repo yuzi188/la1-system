@@ -20,6 +20,10 @@ const agentRoutes = require("./routes/agent");
 const adminAgentRoutes = require("./routes/adminAgent");
 const { startSettlementScheduler } = require("./jobs/settlementJob");
 
+// ── Referral Commission System (Production Safe Patch) ─────────────────────
+const initReferralTables = require("./initReferralTables");
+const { startReferralCommissionScheduler, runReferralCommissionJob } = require("./jobs/referralCommissionJob");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -273,6 +277,9 @@ db.serialize(() => {
 
 // ── Agent tables init (IF NOT EXISTS — non-destructive) ────────────────────
 initAgentTables().catch(err => console.error("[AgentTables] Init error:", err.message));
+
+// ── Referral commission tables init (IF NOT EXISTS — non-destructive) ──────────
+initReferralTables().catch(err => console.error("[ReferralTables] Init error:", err.message));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -1255,6 +1262,28 @@ app.get("/promo/referral-info", async (req, res) => {
     const referrals = await dbAll("SELECT id, username, tg_username, tg_first_name, created_at FROM users WHERE invited_by = ?", [u.id]);
     const logs = await dbAll("SELECT * FROM referral_logs WHERE referrer_id = ? ORDER BY created_at DESC LIMIT 50", [u.id]);
 
+    // ── New: referral_commissions stats ──────────────────────────────────────
+    // Total commission earned (all paid commissions)
+    const totalCommissionRow = await dbGet(
+      "SELECT COALESCE(SUM(commission_amount), 0) as total FROM referral_commissions WHERE referrer_id = ? AND status = 'paid'",
+      [u.id]
+    );
+    // Pending commissions (not yet dispatched — queued for next day)
+    const pendingCommissionRow = await dbGet(
+      "SELECT COALESCE(SUM(commission_amount), 0) as total FROM referral_commissions WHERE referrer_id = ? AND status = 'pending'",
+      [u.id]
+    );
+    // Locked commissions: paid but wagering not yet complete
+    const lockedCommissions = await dbAll(
+      "SELECT * FROM referral_commissions WHERE referrer_id = ? AND status = 'paid' AND wagering_completed < wagering_required ORDER BY created_at DESC LIMIT 20",
+      [u.id]
+    );
+    // Recent commission history
+    const commissionHistory = await dbAll(
+      "SELECT rc.*, u.tg_first_name, u.tg_username, u.username as referred_username FROM referral_commissions rc LEFT JOIN users u ON rc.referred_id = u.id WHERE rc.referrer_id = ? ORDER BY rc.created_at DESC LIMIT 30",
+      [u.id]
+    );
+
     const inviteLink = `${SITE_URL}?ref=${user.invite_code}`;
     const tgLink = `https://t.me/LA1111_bot?start=ref_${user.invite_code}`;
 
@@ -1264,9 +1293,16 @@ app.get("/promo/referral-info", async (req, res) => {
       tg_link: tgLink,
       invite_count: user.invite_count || 0,
       invite_earnings: user.invite_earnings || 0,
+      // New fields for 分潤獎勵 system
+      total_commission: totalCommissionRow?.total || 0,
+      pending_commission: pendingCommissionRow?.total || 0,
+      locked_commissions: lockedCommissions,
+      commission_history: commissionHistory,
+      commission_rate: "10%",
+      wagering_multiplier: 5,
       referrals,
       logs,
-      commission_rates: { level1: "15%", level2: "3%" },
+      commission_rates: { level1: "10%" },
     });
   } catch (e) {
     res.status(401).json({ error: "未授權" });
@@ -1473,13 +1509,36 @@ app.post("/ipn", async (req, res) => {
     db.get("SELECT * FROM deposits WHERE payment_id=?", [req.body.payment_id], async (e, row) => {
       if (!row || row.status === "done") return;
       db.run("UPDATE deposits SET status='done' WHERE id=?", [row.id]);
-      db.run("UPDATE users SET balance=balance+?, total_deposit=total_deposit+? WHERE id=?", [row.amount, row.amount, row.user_id]);
+      db.run("UPDATE users SET balance=balance+?, total_deposit=total_deposit+?, last_deposit_at=datetime('now') WHERE id=?", [row.amount, row.amount, row.user_id]);
 
-      // Check if this is first deposit → trigger referral commission
+      // Check if this is first deposit → trigger legacy referral commission (L1/L2)
       const user = await dbGet("SELECT * FROM users WHERE id = ?", [row.user_id]);
       if (user && (user.total_deposit || 0) === 0) {
-        // First deposit → process referral
+        // First deposit → process legacy referral (kept for backward compatibility)
         processReferralCommission(row.user_id, row.amount);
+      }
+
+      // NEW: Queue a pending referral_commissions record for next-day auto-dispatch
+      // This covers ALL deposits (not just first deposit) for the new 10% system
+      if (user && user.invited_by && user.invited_by !== 0) {
+        const today = getToday();
+        // Insert as 'pending' — daily job will process and pay out tomorrow
+        db.run(`
+          INSERT OR IGNORE INTO referral_commissions
+            (referrer_id, referred_id, deposit_amount, commission_amount, status,
+             wagering_required, wagering_completed, deposit_date)
+          VALUES (?, ?, ?, ?, 'pending', ?, 0, ?)
+        `, [
+          user.invited_by,
+          user.id,
+          row.amount,
+          parseFloat((row.amount * 0.10).toFixed(4)),
+          parseFloat((row.amount * 0.10 * 5).toFixed(4)),
+          today
+        ], (insertErr) => {
+          if (insertErr) console.error("[IPN] Failed to queue referral commission:", insertErr.message);
+          else console.log(`[IPN] Queued referral commission for deposit ${row.id} by user ${user.id}`);
+        });
       }
 
       // Auto-upgrade VIP
@@ -2163,11 +2222,47 @@ app.get("/", (req, res) => res.json({
   ]
 }));
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ADMIN: Manual Referral Commission Dispatch
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Admin: Manually trigger referral commission dispatch (for testing or catch-up)
+app.post("/admin/run-referral-commission", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
+  try {
+    const result = await runReferralCommissionJob();
+    await logAdminAction(req.admin.id, "run_referral_commission", "system", result, req);
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error("Manual referral commission error:", e);
+    res.status(500).json({ error: "分潤派發失敗" });
+  }
+});
+
+// Admin: View referral commission records
+app.get("/admin/referral-commissions", adminLimiter, checkRole(["super_admin", "operator"]), async (req, res) => {
+  try {
+    const rows = await dbAll(`
+      SELECT rc.*,
+             r.username as referrer_username, r.tg_username as referrer_tg,
+             u.username as referred_username, u.tg_username as referred_tg
+      FROM referral_commissions rc
+      LEFT JOIN users r ON rc.referrer_id = r.id
+      LEFT JOIN users u ON rc.referred_id = u.id
+      ORDER BY rc.created_at DESC LIMIT 500
+    `);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: "查詢失敗" });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`LA1 Backend v5.1.0-agent running on port ${PORT}`);
+  console.log(`LA1 Backend v5.2.0-referral running on port ${PORT}`);
   // Start the hourly push job
   startPushJob();
   // Start the agent settlement scheduler (runs hourly, executes at 3 AM)
   startSettlementScheduler();
+  // Start the daily referral commission scheduler (runs at 01:00)
+  startReferralCommissionScheduler();
 });
