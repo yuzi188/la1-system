@@ -2432,6 +2432,130 @@ app.get("/admin/referral-commissions", adminLimiter, checkRole(["super_admin", "
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// ADMIN: Database Backup API
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/backup-db
+ * 手動觸發資料庫備份，導出所有重要表格為 JSON 格式
+ * 僅限 super_admin 使用
+ */
+app.post("/admin/backup-db", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backup = {
+      backup_time: new Date().toISOString(),
+      backup_by: req.admin.username,
+      tables: {}
+    };
+
+    // 備份 users 表
+    backup.tables.users = await dbAll("SELECT * FROM users ORDER BY id ASC");
+
+    // 備份 admins 表
+    try {
+      backup.tables.admins = await dbAll("SELECT id, username, role, created_at FROM admins ORDER BY id ASC");
+    } catch (e) { backup.tables.admins = []; }
+
+    // 備份 deposits 表
+    try {
+      backup.tables.deposits = await dbAll("SELECT * FROM deposits ORDER BY id ASC");
+    } catch (e) { backup.tables.deposits = []; }
+
+    // 備份 withdrawals 表
+    try {
+      backup.tables.withdrawals = await dbAll("SELECT * FROM withdrawals ORDER BY id ASC");
+    } catch (e) { backup.tables.withdrawals = []; }
+
+    // 備份 checkins 表
+    try {
+      backup.tables.checkins = await dbAll("SELECT * FROM checkins ORDER BY id ASC");
+    } catch (e) { backup.tables.checkins = []; }
+
+    // 備份 balance_logs 表
+    try {
+      backup.tables.balance_logs = await dbAll("SELECT * FROM balance_logs ORDER BY id ASC LIMIT 10000");
+    } catch (e) { backup.tables.balance_logs = []; }
+
+    // 備份 referral_logs 表
+    try {
+      backup.tables.referral_logs = await dbAll("SELECT * FROM referral_logs ORDER BY id ASC");
+    } catch (e) { backup.tables.referral_logs = []; }
+
+    // 備份 rebate_logs 表
+    try {
+      backup.tables.rebate_logs = await dbAll("SELECT * FROM rebate_logs ORDER BY id ASC");
+    } catch (e) { backup.tables.rebate_logs = []; }
+
+    // 備份 announcements 表
+    try {
+      backup.tables.announcements = await dbAll("SELECT * FROM announcements ORDER BY id ASC");
+    } catch (e) { backup.tables.announcements = []; }
+
+    // 備份 tickets 表
+    try {
+      backup.tables.tickets = await dbAll("SELECT * FROM tickets ORDER BY id ASC");
+    } catch (e) { backup.tables.tickets = []; }
+
+    // 備份 agents 表（如果存在）
+    try {
+      backup.tables.agents = await dbAll("SELECT * FROM agents ORDER BY id ASC");
+    } catch (e) { backup.tables.agents = []; }
+
+    // 備份 agent_commissions 表（如果存在）
+    try {
+      backup.tables.agent_commissions = await dbAll("SELECT * FROM agent_commissions ORDER BY id ASC LIMIT 5000");
+    } catch (e) { backup.tables.agent_commissions = []; }
+
+    // 備份 referral_commissions 表（如果存在）
+    try {
+      backup.tables.referral_commissions = await dbAll("SELECT * FROM referral_commissions ORDER BY id ASC LIMIT 5000");
+    } catch (e) { backup.tables.referral_commissions = []; }
+
+    // 統計資訊
+    backup.summary = {
+      total_users: backup.tables.users.length,
+      total_deposits: backup.tables.deposits.length,
+      total_withdrawals: backup.tables.withdrawals.length,
+      total_checkins: backup.tables.checkins.length,
+      total_balance_logs: backup.tables.balance_logs.length,
+      total_referral_logs: backup.tables.referral_logs.length,
+    };
+
+    await logAdminAction(req.admin.id, "backup_db", "database", { timestamp, summary: backup.summary }, req);
+
+    // 設定下載標頭，讓瀏覽器直接下載 JSON 檔案
+    res.setHeader("Content-Disposition", `attachment; filename=\"db_backup_${timestamp}.json\"`);
+    res.setHeader("Content-Type", "application/json");
+    res.json(backup);
+  } catch (e) {
+    console.error("Backup DB error:", e);
+    res.status(500).json({ error: "備份失敗", detail: e.message });
+  }
+});
+
+/**
+ * GET /admin/backup-db/users
+ * 快速導出 users 表為 JSON（僅用戶資料）
+ */
+app.get("/admin/backup-db/users", adminLimiter, checkRole(["super_admin", "operator"]), async (req, res) => {
+  try {
+    const users = await dbAll("SELECT * FROM users ORDER BY id ASC");
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    res.setHeader("Content-Disposition", `attachment; filename=\"users_backup_${timestamp}.json\"`);
+    res.setHeader("Content-Type", "application/json");
+    res.json({
+      export_time: new Date().toISOString(),
+      exported_by: req.admin.username,
+      total: users.length,
+      users
+    });
+  } catch (e) {
+    res.status(500).json({ error: "導出失敗", detail: e.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`LA1 Backend v5.2.0-referral running on port ${PORT}`);
