@@ -110,11 +110,26 @@ db.serialize(() => {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     amount REAL,
-    status TEXT,
+    status TEXT DEFAULT 'pending', -- pending, approved, rejected
     payment_id TEXT,
+    tx_id TEXT,
+    screenshot_url TEXT,
     risk INTEGER DEFAULT 0,
+    reviewed_by TEXT,
+    reviewed_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
+  )`, () => {
+    // Add missing columns if table already exists
+    const cols = [
+      "tx_id TEXT",
+      "screenshot_url TEXT",
+      "reviewed_by TEXT",
+      "reviewed_at DATETIME"
+    ];
+    cols.forEach(col => {
+      db.run(`ALTER TABLE deposits ADD COLUMN ${col}`, () => {});
+    });
+  });
 
   db.run(`CREATE TABLE IF NOT EXISTS blacklist(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -568,6 +583,16 @@ app.post("/admin/adjust-balance", adminLimiter, async (req, res) => {
   if (numAmount > 10000000) return res.status(400).json({ error: "單筆上分/扣分不能超過 10,000,000 USDT" });
   if (type !== "add" && type !== "deduct") return res.status(400).json({ error: "type 必須為 add 或 deduct" });
 
+  // ── VIP threshold helper ────────────────────────────────────────────────────
+  function calcVipLevel(totalDeposit) {
+    if (totalDeposit >= 100000) return 5;
+    if (totalDeposit >= 50000)  return 4;
+    if (totalDeposit >= 20000)  return 3;
+    if (totalDeposit >= 5000)   return 2;
+    if (totalDeposit >= 1000)   return 1;
+    return 0;
+  }
+
   try {
     const user = await dbGet("SELECT * FROM users WHERE id = ?", [userId]);
     if (!user) return res.status(404).json({ error: "用戶不存在" });
@@ -578,57 +603,138 @@ app.post("/admin/adjust-balance", adminLimiter, async (req, res) => {
     // Determine balance_log type: admin_add or admin_deduct
     const logType = type === "add" ? "admin_add" : "admin_deduct";
 
-    // Determine if this should count as a deposit (update total_deposit)
-    // Keywords: 儲值, 充值, deposit, 入款, 補款
+    // Determine if this is a deposit confirmation
+    // Exact match: 儲值確認, or keywords: 儲值, 充值, deposit, 入款, 補款
     const reasonLower = (reason || "").toLowerCase();
+    const isDepositConfirm = reason === "儲值確認";
     const isDepositKeyword = /儲值|充值|deposit|入款|補款/.test(reasonLower);
     const shouldUpdateDeposit = type === "add" && isDepositKeyword;
 
     // Build operator string with admin info
     const operatorStr = `admin:${adminPayload.username || adminPayload.id}`;
+    const adminUsername = adminPayload.username || String(adminPayload.id);
 
-    // Update balance (and optionally total_deposit)
+    // ── Step 1: Update user balance (and optionally total_deposit + VIP) ─────
+    let newTotalDeposit = user.total_deposit || 0;
+    let newVipLevel = user.vip_level || 0;
+    let vipUpgraded = false;
+
     if (shouldUpdateDeposit) {
+      newTotalDeposit = newTotalDeposit + numAmount;
+      const calculatedVip = calcVipLevel(newTotalDeposit);
+      if (calculatedVip > newVipLevel) {
+        newVipLevel = calculatedVip;
+        vipUpgraded = true;
+      }
       await dbRun(
-        "UPDATE users SET balance = ?, total_deposit = total_deposit + ? WHERE id = ?",
-        [newBalance, numAmount, userId]
+        "UPDATE users SET balance = ?, total_deposit = ?, vip_level = ? WHERE id = ?",
+        [newBalance, newTotalDeposit, newVipLevel, userId]
       );
     } else {
       await dbRun("UPDATE users SET balance = ? WHERE id = ?", [newBalance, userId]);
     }
 
-    // Record to balance_logs with proper type
+    // ── Step 2: Record to balance_logs ───────────────────────────────────────
+    const balanceLogType = isDepositConfirm ? "deposit" : logType;
     await dbRun(
       "INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
-      [userId, logType, type === "add" ? numAmount : -numAmount, reason || "", operatorStr]
+      [userId, balanceLogType, type === "add" ? numAmount : -numAmount, reason || "", operatorStr]
     );
 
-    // Log admin action
+    // ── Step 3: Write deposits table record (for deposit confirmations) ───────
+    let depositId = null;
+    if (isDepositConfirm) {
+      const depResult = await dbRun(
+        "INSERT INTO deposits (user_id, amount, status, reviewed_by, reviewed_at, created_at) VALUES (?, ?, 'approved', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        [userId, numAmount, adminUsername]
+      );
+      depositId = depResult.lastID;
+    }
+
+    // ── Step 4: First deposit bonus (only for deposit confirmation) ───────────
+    let firstDepositBonus = 0;
+    let firstDepositClaimed = false;
+    if (isDepositConfirm && (user.first_deposit_claimed === 0 || user.first_deposit_claimed === null) && numAmount >= 500) {
+      firstDepositBonus = Math.floor(numAmount * 0.33 * 100) / 100; // 33% bonus
+      const wagerReq = (numAmount + firstDepositBonus) * 10;
+      // Add bonus to balance
+      await dbRun(
+        "UPDATE users SET balance = balance + ?, first_deposit_claimed = 1, wager_requirement = wager_requirement + ? WHERE id = ?",
+        [firstDepositBonus, wagerReq, userId]
+      );
+      // Record bonus in balance_logs
+      await dbRun(
+        "INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, 'first_deposit', ?, ?, ?)",
+        [userId, firstDepositBonus, `首充獎勵 33% (儲值 ${numAmount} USDT)`, "system"]
+      );
+      firstDepositClaimed = true;
+    }
+
+    // ── Step 5: Referral commission (for deposit confirmations with inviter) ──
+    let referralScheduled = false;
+    if (isDepositConfirm && user.invited_by && user.invited_by > 0) {
+      const commissionAmount = Math.floor(numAmount * 0.10 * 100) / 100; // 10% commission
+      const wageringRequired = commissionAmount * 5; // 5x wagering required
+      // Schedule for next day (insert as pending)
+      await dbRun(
+        `INSERT INTO referral_commissions 
+         (referrer_id, referred_id, deposit_amount, commission_amount, status, wagering_required, deposit_date)
+         VALUES (?, ?, ?, ?, 'pending', ?, date('now'))`,
+        [user.invited_by, userId, numAmount, commissionAmount, wageringRequired]
+      );
+      referralScheduled = true;
+    }
+
+    // ── Step 6: Log admin action ──────────────────────────────────────────────
     logAdminAction(
       adminPayload.id,
       type === "add" ? "adjust_balance_add" : "adjust_balance_deduct",
       "user",
-      { userId, amount: numAmount, reason, shouldUpdateDeposit },
+      { userId, amount: numAmount, reason, shouldUpdateDeposit, vipUpgraded, firstDepositClaimed, referralScheduled },
       req
     );
 
-    // TG notification to user
+    // ── Step 7: TG notifications ──────────────────────────────────────────────
+    const updatedUser = await dbGet("SELECT balance FROM users WHERE id = ?", [userId]);
+    const finalBalance = updatedUser ? updatedUser.balance : newBalance + (firstDepositBonus || 0);
+
     if (user.tg_id) {
       const displayName = user.tg_first_name || user.tg_username || user.username;
       const actionText = type === "add" ? "上分" : "扣款";
       const emoji = type === "add" ? "💰" : "📤";
-      const depositNote = shouldUpdateDeposit ? "\n📊 已計入累計儲值" : "";
-      const msg = `${emoji} <b>帳戶${actionText}通知</b>\n\n親愛的 ${displayName}，\n您的帳戶已${type === "add" ? "增加" : "扣除"} <b>${numAmount.toFixed(2)} USDT</b>\n💼 當前餘額：<b>${newBalance.toFixed(2)} USDT</b>${reason ? `\n📝 備註：${reason}` : ""}${depositNote}\n\n如有疑問請聯繫客服 @LA1111_bot`;
+      let extraNotes = "";
+      if (shouldUpdateDeposit) extraNotes += `\n📊 累計儲值：<b>${newTotalDeposit.toFixed(2)} USDT</b>`;
+      if (vipUpgraded) extraNotes += `\n👑 恭喜升級至 <b>VIP${newVipLevel}</b>！`;
+      if (firstDepositClaimed) extraNotes += `\n🎁 首充獎勵 <b>+${firstDepositBonus.toFixed(2)} USDT</b> 已發放！`;
+      if (referralScheduled) extraNotes += `\n🤝 推薦返佣將於明日自動發放給邀請人`;
+      const msg = `${emoji} <b>帳戶${actionText}通知</b>\n\n親愛的 ${displayName}，\n您的帳戶已${type === "add" ? "增加" : "扣除"} <b>${numAmount.toFixed(2)} USDT</b>\n💼 當前餘額：<b>${finalBalance.toFixed(2)} USDT</b>${reason ? `\n📝 備註：${reason}` : ""}${extraNotes}\n\n如有疑問請聯繫客服 @LA1111_bot`;
       sendTGToUser(user.tg_id, msg);
     }
-    sendTG(`${type === "add" ? "⬆️ 上分" : "⬇️ 扣分"} | ${user.tg_username || user.username} | ${numAmount} USDT | 餘額: ${newBalance.toFixed(2)} | 備註: ${reason || "無"}${shouldUpdateDeposit ? " | 已計入儲值" : ""}`);
+
+    // Notify inviter about scheduled commission
+    if (referralScheduled) {
+      const inviter = await dbGet("SELECT tg_id, tg_first_name, tg_username, username FROM users WHERE id = ?", [user.invited_by]);
+      if (inviter && inviter.tg_id) {
+        const commissionAmount = Math.floor(numAmount * 0.10 * 100) / 100;
+        const inviterName = inviter.tg_first_name || inviter.tg_username || inviter.username;
+        const referredName = user.tg_first_name || user.tg_username || user.username;
+        sendTGToUser(inviter.tg_id, `🤝 <b>推薦返佣通知</b>\n\n親愛的 ${inviterName}，\n您邀請的好友 ${referredName} 已完成儲值 <b>${numAmount.toFixed(2)} USDT</b>\n💰 您將獲得返佣：<b>${commissionAmount.toFixed(2)} USDT</b>\n⏰ 返佣將於明日自動到帳\n\n繼續邀請好友，賺取更多返佣！`);
+      }
+    }
+
+    sendTG(`${type === "add" ? "⬆️ 上分" : "⬇️ 扣分"} | ${user.tg_username || user.username} | ${numAmount} USDT | 餘額: ${finalBalance.toFixed(2)} | 備註: ${reason || "無"}${shouldUpdateDeposit ? " | 已計入儲值" : ""}${vipUpgraded ? ` | VIP升至${newVipLevel}` : ""}${firstDepositClaimed ? ` | 首充獎勵+${firstDepositBonus}` : ""}`);
 
     res.json({
       ok: true,
-      newBalance,
+      newBalance: finalBalance,
       message: `${type === "add" ? "上分" : "扣分"}成功`,
       deposit_updated: shouldUpdateDeposit,
-      log_type: logType
+      log_type: balanceLogType,
+      vip_upgraded: vipUpgraded,
+      new_vip_level: newVipLevel,
+      first_deposit_bonus: firstDepositBonus,
+      referral_scheduled: referralScheduled,
+      deposit_id: depositId
     });
   } catch (e) {
     console.error("[adjust-balance] error:", e.message);
@@ -2729,6 +2835,95 @@ app.get("/admin/users/:id/balance-logs", adminLimiter, checkRole(["super_admin",
  * 列出資料庫中所有資料表及其紀錄數，用於驗證所有表格都已正確建立
  * 僅限 super_admin 使用
  */
+// ── DEPOSIT REQUESTS ────────────────────────────────────────────────────────
+
+// Create a deposit request (called by TG Bot or Frontend)
+app.post("/api/deposit-request", auth, async (req, res) => {
+  const { amount, tx_id, screenshot_url } = req.body;
+  if (!amount) return res.status(400).json({ error: "Amount is required" });
+
+  try {
+    const result = await dbRun(
+      "INSERT INTO deposits (user_id, amount, tx_id, screenshot_url, status) VALUES (?, ?, ?, ?, 'pending')",
+      [req.user.id, amount, tx_id || "", screenshot_url || ""]
+    );
+    res.json({ ok: true, id: result.lastID });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// List deposit requests for admin
+app.get("/admin/deposit-requests", adminAuth, async (req, res) => {
+  const { status = 'pending' } = req.query;
+  try {
+    const rows = await dbAll(`
+      SELECT d.*, u.username, u.tg_id, u.tg_username, u.tg_first_name 
+      FROM deposits d
+      JOIN users u ON d.user_id = u.id
+      WHERE d.status = ?
+      ORDER BY d.created_at DESC
+    `, [status]);
+    res.json({ ok: true, data: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Approve deposit request
+app.post("/admin/deposit-requests/:id/approve", adminAuth, async (req, res) => {
+  const { id } = req.params;
+  const admin_id = req.admin.username;
+
+  try {
+    const deposit = await dbGet("SELECT * FROM deposits WHERE id = ? AND status = 'pending'", [id]);
+    if (!deposit) return res.status(404).json({ error: "Deposit request not found or already processed" });
+
+    const user = await dbGet("SELECT * FROM users WHERE id = ?", [deposit.user_id]);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // 1. Update user balance and total_deposit
+    await dbRun(
+      "UPDATE users SET balance = balance + ?, total_deposit = total_deposit + ? WHERE id = ?",
+      [deposit.amount, deposit.amount, deposit.user_id]
+    );
+
+    // 2. Record balance log
+    await dbRun(
+      "INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, 'deposit', ?, ?, ?)",
+      [deposit.user_id, deposit.amount, `儲值確認 (ID: ${id}, TxID: ${deposit.tx_id || 'N/A'})`, `admin:${admin_id}`]
+    );
+
+    // 3. Update deposit status
+    await dbRun(
+      "UPDATE deposits SET status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [admin_id, id]
+    );
+
+    res.json({ ok: true, message: "Deposit approved and balance updated" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reject deposit request
+app.post("/admin/deposit-requests/:id/reject", adminAuth, async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body;
+  const admin_id = req.admin.username;
+
+  try {
+    const result = await dbRun(
+      "UPDATE deposits SET status = 'rejected', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'",
+      [admin_id, id]
+    );
+    if (result.changes === 0) return res.status(404).json({ error: "Deposit request not found or already processed" });
+    res.json({ ok: true, message: "Deposit rejected" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/admin/db-tables", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
   try {
     const tables = await dbAll(
