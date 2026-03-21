@@ -14,6 +14,12 @@ const { db, dbGet, dbAll, dbRun, initSchema } = require("./models/db");
 // ── Push job & services ─────────────────────────────────────────────────────
 const { startPushJob } = require("./jobs/pushJob");
 
+// ── Agent/Partner system (Production Safe Patch) ───────────────────────────
+const initAgentTables = require("./initAgentTables");
+const agentRoutes = require("./routes/agent");
+const adminAgentRoutes = require("./routes/adminAgent");
+const { startSettlementScheduler } = require("./jobs/settlementJob");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -264,6 +270,9 @@ db.serialize(() => {
   // Feature #6: Initialize message_templates table + seed data (from models/db.js)
   initSchema();
 });
+
+// ── Agent tables init (IF NOT EXISTS — non-destructive) ────────────────────
+initAgentTables().catch(err => console.error("[AgentTables] Init error:", err.message));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -2128,8 +2137,12 @@ app.delete("/admin/templates/:id", adminLimiter, checkRole(["super_admin"]), asy
 // HEALTH CHECK
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── Register Agent/Partner routes (additive — no existing routes modified) ──
+app.use(agentRoutes);
+app.use(adminAgentRoutes);
+
 app.get("/", (req, res) => res.json({
-  status: "ok", service: "la1-backend", version: "5.0.0",
+  status: "ok", service: "la1-backend", version: "5.1.0-agent",
   endpoints: [
     "/tg-login", "/login", "/register", "/me",
     "/withdraw", "/withdraw/history",
@@ -2143,12 +2156,18 @@ app.get("/", (req, res) => res.json({
     "/admin/calculate-rebate",
     "/admin/announcement", "/admin/tickets", "/admin/reply-ticket",
     "/admin/templates",
+    // Agent/Partner system (default OFF via feature flag)
+    "/agent/dashboard", "/agent/referrals", "/agent/commissions",
+    "/admin/agents", "/admin/agents/toggle", "/admin/agents/settlements",
+    "/admin/agents/relations",
   ]
 }));
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`LA1 Backend v5.0 running on port ${PORT}`);
+  console.log(`LA1 Backend v5.1.0-agent running on port ${PORT}`);
   // Start the hourly push job
   startPushJob();
+  // Start the agent settlement scheduler (runs hourly, executes at 3 AM)
+  startSettlementScheduler();
 });
