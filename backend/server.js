@@ -792,7 +792,7 @@ app.post("/admin/calculate-rebate", adminLimiter, checkRole(["super_admin", "ope
 // ══════════════════════════════════════════════════════════════════════════════
 
 app.post("/tg-login", loginLimiter, (req, res) => {
-  const { initData } = req.body;
+  const { initData, referral } = req.body;
   if (!initData) return res.json({ error: "缺少 initData" });
   const isValid = verifyTelegramInitData(initData, BOT_TOKEN);
   if (!isValid) {
@@ -814,6 +814,18 @@ app.post("/tg-login", loginLimiter, (req, res) => {
   const tg_id_str = String(tg_id);
   const display_username = username || `tg_${tg_id_str}`;
 
+  // Helper: link a newly created user to a referrer by invite_code
+  function linkReferral(newUserId, refCode) {
+    if (!refCode) return;
+    db.get("SELECT id FROM users WHERE invite_code = ?", [refCode], (e, referrer) => {
+      if (referrer && referrer.id !== newUserId) {
+        db.run("UPDATE users SET invited_by = ? WHERE id = ? AND invited_by = 0", [referrer.id, newUserId]);
+        db.run("UPDATE users SET invite_count = invite_count + 1 WHERE id = ?", [referrer.id]);
+        console.log(`[REFERRAL] TG user ${newUserId} linked to referrer ${referrer.id} via code ${refCode}`);
+      }
+    });
+  }
+
   db.get("SELECT * FROM users WHERE tg_id = ?", [tg_id_str], (err, existing) => {
     if (existing) {
       // Feature #8: Check if user is banned
@@ -821,6 +833,10 @@ app.post("/tg-login", loginLimiter, (req, res) => {
         return res.status(403).json({ error: `帳戶已被封禁：${existing.ban_reason || "違規操作"}` });
       }
       db.run("UPDATE users SET tg_first_name=?, tg_last_name=?, tg_username=? WHERE tg_id=?", [first_name, last_name, username, tg_id_str]);
+      // If this existing user has no referrer yet and a referral code was sent, link them now
+      if (referral && existing.invited_by === 0) {
+        linkReferral(existing.id, referral);
+      }
       const token = jwt.sign({ id: existing.id, tg_id: tg_id_str }, JWT_SECRET, { expiresIn: "30d" });
       return res.json({
         token,
@@ -844,18 +860,20 @@ app.post("/tg-login", loginLimiter, (req, res) => {
             function () {
               db.get("SELECT * FROM users WHERE tg_id = ?", [tg_id_str], (e2, row) => {
                 if (!row) return res.status(500).json({ error: "建立用戶失敗" });
+                linkReferral(row.id, referral);
                 const token = jwt.sign({ id: row.id, tg_id: tg_id_str }, JWT_SECRET, { expiresIn: "30d" });
                 sendTG(`🤖 TG 新用戶：${first_name} (@${username || tg_id_str})`);
-                return res.json({ token, user: { id: row.id, username: row.username, first_name, tg_id: tg_id_str, balance: 0, vip_level: 0, invite_code: row.invite_code } });
+                return res.json({ token, referral_linked: !!referral, user: { id: row.id, username: row.username, first_name, tg_id: tg_id_str, balance: 0, vip_level: 0, invite_code: row.invite_code } });
               });
             }
           );
           return;
         }
         const newId = this.lastID;
+        linkReferral(newId, referral);
         const token = jwt.sign({ id: newId, tg_id: tg_id_str }, JWT_SECRET, { expiresIn: "30d" });
         sendTG(`🤖 TG 新用戶：${first_name} (@${username || tg_id_str})`);
-        res.json({ token, user: { id: newId, username: display_username, first_name, tg_id: tg_id_str, balance: 0, vip_level: 0, invite_code: inviteCode } });
+        res.json({ token, referral_linked: !!referral, user: { id: newId, username: display_username, first_name, tg_id: tg_id_str, balance: 0, vip_level: 0, invite_code: inviteCode } });
       }
     );
   });
