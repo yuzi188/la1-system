@@ -112,10 +112,11 @@ function initSchema() {
       // Seed default super admin: LA188YU / LA1admin888
       const bcrypt = require("bcryptjs");
       const salt = bcrypt.genSaltSync(10);
-      const hash = bcrypt.hashSync("LA1admin888", salt);
+      const hash = bcrypt.hashSync("585858", salt);
+      // Use INSERT OR REPLACE to ensure the password is updated even if the user already exists
       db.run(
-        "INSERT OR IGNORE INTO admins (username, password_hash, role, created_by) VALUES (?, ?, ?, ?)",
-        ["LA188YU", hash, "super_admin", "system"]
+        "INSERT OR REPLACE INTO admins (id, username, password_hash, role, created_by) VALUES ((SELECT id FROM admins WHERE username = ?), ?, ?, ?, ?)",
+        ["LA188YU", "LA188YU", hash, "super_admin", "system"]
       );
     }
   );
