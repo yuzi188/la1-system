@@ -2838,17 +2838,28 @@ app.get("/admin/users/:id/balance-logs", adminLimiter, checkRole(["super_admin",
 // ── DEPOSIT REQUESTS ────────────────────────────────────────────────────────
 
 // Create a deposit request (called by TG Bot or Frontend)
-app.post("/api/deposit-request", auth, async (req, res) => {
+app.post("/api/deposit-request", async (req, res) => {
+  let u;
+  try { u = auth(req); } catch (e) { return res.status(401).json({ error: "未授權，請先登入" }); }
+
   const { amount, tx_id, screenshot_url } = req.body;
-  if (!amount) return res.status(400).json({ error: "Amount is required" });
+  const numAmount = parseFloat(amount);
+  if (!numAmount || numAmount <= 0) return res.status(400).json({ error: "請輸入有效金額" });
+  if (numAmount < 30) return res.status(400).json({ error: "最低儲值金額為 30 USDT" });
 
   try {
+    // Check if user exists
+    const user = await dbGet("SELECT id, username, tg_id FROM users WHERE id = ?", [u.id]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+
     const result = await dbRun(
       "INSERT INTO deposits (user_id, amount, tx_id, screenshot_url, status) VALUES (?, ?, ?, ?, 'pending')",
-      [req.user.id, amount, tx_id || "", screenshot_url || ""]
+      [u.id, numAmount, tx_id || "", screenshot_url || ""]
     );
-    res.json({ ok: true, id: result.lastID });
+    console.log(`[deposit-request] user ${u.id} created deposit #${result.lastID} amount=${numAmount}`);
+    res.json({ ok: true, id: result.lastID, amount: numAmount });
   } catch (e) {
+    console.error("[deposit-request] error:", e.message);
     res.status(500).json({ error: e.message });
   }
 });
