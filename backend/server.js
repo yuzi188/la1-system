@@ -7,6 +7,12 @@ const axios = require("axios");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const rateLimit = require("express-rate-limit");
+const http = require("http");
+const { Server: SocketIOServer } = require("socket.io");
+
+// ── Poker module ───────────────────────────────────────────────────────────
+const { initPokerSocket } = require("./poker/socket");
+const { initPokerSchema } = require("./poker/db");
 
 // ── Feature #1: Unified DB instance ─────────────────────────────────────────
 const { db, dbGet, dbAll, dbRun, initSchema, seedUsersIfEmpty } = require("./models/db");
@@ -3055,9 +3061,66 @@ app.get("/admin/db-tables", adminLimiter, checkRole(["super_admin"]), async (req
   }
 });
 
+// ── Poker REST API: room list ────────────────────────────────────────────────
+app.get("/api/rooms", async (req, res) => {
+  try {
+    const { getRoomList } = require("./poker/socket");
+    // getRoomList is only available after initPokerSocket, fallback to DB
+    const pokerDb = require("./poker/db");
+    const configs = await pokerDb.loadRoomConfigs();
+    const list = configs.map(cfg => ({
+      id: cfg.id,
+      name: cfg.name,
+      smallBlind: cfg.small_blind,
+      bigBlind: cfg.big_blind,
+      minBuyIn: cfg.min_buyin,
+      maxBuyIn: cfg.max_buyin,
+      maxPlayers: cfg.max_players,
+      playerCount: 0,
+      phase: "WAITING",
+    }));
+    res.json(list);
+  } catch (e) {
+    console.error("[Poker API] /api/rooms error:", e.message);
+    res.json([]);
+  }
+});
+
+// ── Poker System Config API (hot-reload without redeploy) ───────────────────
+app.post("/api/poker/system-configs/refresh", async (req, res) => {
+  try {
+    const pokerDb = require("./poker/db");
+    pokerDb.invalidateSystemConfigCache();
+    res.json({ success: true, message: "Poker config cache invalidated" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`LA1 Backend v5.3.0-stable running on port ${PORT}`);
+
+// ── Create HTTP server with Socket.IO ────────────────────────────────────────
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+  transports: ["websocket", "polling"],
+});
+
+// Initialize poker schema and socket namespace
+initPokerSchema()
+  .then(() => {
+    console.log("[Poker] Schema initialized");
+    initPokerSocket(io);
+    console.log("[Poker] Socket.IO /poker namespace ready");
+  })
+  .catch(err => console.error("[Poker] Init error:", err.message));
+
+server.listen(PORT, () => {
+  console.log(`LA1 Backend v5.4.0-poker running on port ${PORT}`);
+  console.log(`[Poker] WebSocket available at ws://0.0.0.0:${PORT}/poker`);
   // Restore user data if DB is newly created (Persistent Volume first boot)
   setTimeout(() => {
     seedUsersIfEmpty().catch(err => console.error("[DB] seedUsersIfEmpty failed:", err.message));
