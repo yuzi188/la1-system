@@ -834,12 +834,14 @@ app.post("/tg-login", loginLimiter, (req, res) => {
       }
       db.run("UPDATE users SET tg_first_name=?, tg_last_name=?, tg_username=? WHERE tg_id=?", [first_name, last_name, username, tg_id_str]);
       // If this existing user has no referrer yet and a referral code was sent, link them now
-      if (referral && existing.invited_by === 0) {
+      const referralLinked = !!(referral && existing.invited_by === 0);
+      if (referralLinked) {
         linkReferral(existing.id, referral);
       }
       const token = jwt.sign({ id: existing.id, tg_id: tg_id_str }, JWT_SECRET, { expiresIn: "30d" });
       return res.json({
         token,
+        referral_linked: referralLinked,
         user: {
           id: existing.id, username: existing.tg_username || existing.username || display_username,
           first_name, last_name, tg_id: tg_id_str, balance: existing.balance,
