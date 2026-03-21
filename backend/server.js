@@ -184,6 +184,29 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Announcements table
+  db.run(`CREATE TABLE IF NOT EXISTS announcements(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    content TEXT,
+    type TEXT DEFAULT 'info',
+    pinned INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // Tickets table
+  db.run(`CREATE TABLE IF NOT EXISTS tickets(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    subject TEXT,
+    message TEXT,
+    status TEXT DEFAULT 'open',
+    admin_reply TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    replied_at DATETIME
+  )`);
+
   // Add missing columns to existing users table (safe to run multiple times)
   const newCols = [
     "vip_level INTEGER DEFAULT 0",
@@ -1332,6 +1355,117 @@ app.get("/promo/summary", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ANNOUNCEMENT SYSTEM
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Public: Get all active announcements
+app.get("/announcements", async (req, res) => {
+  try {
+    const rows = await dbAll("SELECT * FROM announcements WHERE active = 1 ORDER BY pinned DESC, created_at DESC");
+    res.json(rows);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+// Admin: Create announcement
+app.post("/admin/announcement", async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  const { title, content, type, pinned } = req.body;
+  if (!title || !content) return res.status(400).json({ error: "標題和內容不能為空" });
+  const validTypes = ["info", "warning", "promo", "maintenance"];
+  const annType = validTypes.includes(type) ? type : "info";
+  try {
+    const result = await dbRun(
+      "INSERT INTO announcements (title, content, type, pinned) VALUES (?, ?, ?, ?)",
+      [title, content, annType, pinned ? 1 : 0]
+    );
+    res.json({ ok: true, id: result.lastID, message: "公告已發布" });
+  } catch (e) {
+    res.status(500).json({ error: "發布失敗" });
+  }
+});
+
+// Admin: Delete announcement
+app.delete("/admin/announcement/:id", async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  try {
+    await dbRun("DELETE FROM announcements WHERE id = ?", [req.params.id]);
+    res.json({ ok: true, message: "公告已刪除" });
+  } catch (e) {
+    res.status(500).json({ error: "刪除失敗" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TICKET SYSTEM
+// ══════════════════════════════════════════════════════════════════════════════
+
+// User: Submit ticket
+app.post("/ticket", async (req, res) => {
+  try {
+    const u = auth(req);
+    const { subject, message } = req.body;
+    if (!subject || !message) return res.status(400).json({ error: "主題和內容不能為空" });
+    const result = await dbRun(
+      "INSERT INTO tickets (user_id, subject, message) VALUES (?, ?, ?)",
+      [u.id, subject, message]
+    );
+    sendTG(`🎫 新工單 #${result.lastID}：${subject}`);
+    res.json({ ok: true, id: result.lastID, message: "工單已提交" });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// User: Get my tickets
+app.get("/my-tickets", async (req, res) => {
+  try {
+    const u = auth(req);
+    const rows = await dbAll("SELECT * FROM tickets WHERE user_id = ? ORDER BY created_at DESC", [u.id]);
+    res.json(rows);
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// Admin: Get all tickets
+app.get("/admin/tickets", async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  try {
+    const rows = await dbAll(
+      `SELECT t.*, u.username, u.tg_username, u.tg_first_name
+       FROM tickets t LEFT JOIN users u ON t.user_id = u.id
+       ORDER BY CASE WHEN t.status = 'open' THEN 0 WHEN t.status = 'replied' THEN 1 ELSE 2 END, t.created_at DESC`
+    );
+    res.json(rows);
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+// Admin: Reply to ticket
+app.post("/admin/reply-ticket", async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  const { ticketId, reply } = req.body;
+  if (!ticketId || !reply) return res.status(400).json({ error: "缺少必要參數" });
+  try {
+    await dbRun(
+      "UPDATE tickets SET admin_reply = ?, status = 'replied', replied_at = CURRENT_TIMESTAMP WHERE id = ?",
+      [reply, ticketId]
+    );
+    // Notify user via TG
+    const ticket = await dbGet("SELECT t.*, u.tg_id, u.tg_first_name, u.username FROM tickets t LEFT JOIN users u ON t.user_id = u.id WHERE t.id = ?", [ticketId]);
+    if (ticket && ticket.tg_id) {
+      sendTGToUser(ticket.tg_id, `📩 <b>工單回覆通知</b>\n\n工單 #${ticketId}：${ticket.subject}\n\n回覆：${reply}\n\n如有其他問題，歡迎繼續提交工單。`);
+    }
+    res.json({ ok: true, message: "回覆成功" });
+  } catch (e) {
+    res.status(500).json({ error: "回覆失敗" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -1343,9 +1477,11 @@ app.get("/", (req, res) => res.json({
     "/promo/first-deposit", "/promo/checkin", "/promo/checkin-status",
     "/promo/vip-info", "/promo/referral-info", "/promo/tasks", "/promo/claim-task",
     "/promo/weekend-status", "/promo/summary", "/promo/rebate-history",
+    "/announcements", "/ticket", "/my-tickets",
     "/admin/login", "/admin/users", "/admin/adjust-balance", "/admin/flag-user",
     "/admin/ban-user", "/admin/withdrawals", "/admin/review-withdrawal",
     "/admin/calculate-rebate",
+    "/admin/announcement", "/admin/tickets", "/admin/reply-ticket",
   ]
 }));
 
