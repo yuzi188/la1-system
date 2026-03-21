@@ -2211,6 +2211,104 @@ app.delete("/admin/templates/:id", adminLimiter, checkRole(["super_admin"]), asy
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// TRANSACTION HISTORY
+// ══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/transactions — Returns combined deposits + withdrawals sorted by newest first
+app.get("/api/transactions", async (req, res) => {
+  try {
+    const u = auth(req);
+    const deposits = await dbAll(
+      "SELECT id, amount, status, created_at, 'deposit' as type FROM deposits WHERE user_id = ? ORDER BY created_at DESC LIMIT 100",
+      [u.id]
+    );
+    const withdrawals = await dbAll(
+      "SELECT id, amount, status, created_at, 'withdrawal' as type FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC LIMIT 100",
+      [u.id]
+    );
+    // Merge and sort by created_at descending
+    const all = [...deposits, ...withdrawals].sort((a, b) => {
+      return new Date(b.created_at) - new Date(a.created_at);
+    });
+    res.json(all);
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECURITY CENTER — NICKNAME & AVATAR
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Ensure nickname and avatar columns exist (safe ALTER TABLE pattern)
+db.serialize(() => {
+  const securityCols = [
+    "nickname TEXT DEFAULT ''",
+    "nickname_changed INTEGER DEFAULT 0",
+    "avatar TEXT DEFAULT ''",
+  ];
+  securityCols.forEach(col => {
+    db.run(`ALTER TABLE users ADD COLUMN ${col}`, () => {});
+  });
+});
+
+// GET /api/user/profile — Returns current nickname and avatar
+app.get("/api/user/profile", async (req, res) => {
+  try {
+    const u = auth(req);
+    const user = await dbGet("SELECT id, tg_first_name, tg_username, username, nickname, nickname_changed, avatar FROM users WHERE id = ?", [u.id]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+    res.json({
+      id: user.id,
+      display_name: user.nickname || user.tg_first_name || user.tg_username || user.username || "",
+      nickname: user.nickname || "",
+      nickname_changed: user.nickname_changed || 0,
+      avatar: user.avatar || "",
+    });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// PUT /api/user/nickname — Change nickname (only once)
+app.put("/api/user/nickname", async (req, res) => {
+  try {
+    const u = auth(req);
+    const user = await dbGet("SELECT id, nickname_changed FROM users WHERE id = ?", [u.id]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+    if (user.nickname_changed) return res.status(400).json({ error: "暱稱只能修改一次，已無法再次更改" });
+
+    const { nickname } = req.body;
+    if (!nickname || !nickname.trim()) return res.status(400).json({ error: "暱稱不能為空" });
+    const trimmed = nickname.trim();
+    if (trimmed.length < 2 || trimmed.length > 20) return res.status(400).json({ error: "暱稱長度需在 2~20 個字元之間" });
+
+    await dbRun("UPDATE users SET nickname = ?, nickname_changed = 1 WHERE id = ?", [trimmed, u.id]);
+    res.json({ ok: true, nickname: trimmed, message: "暱稱已更新" });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// PUT /api/user/avatar — Upload/change avatar (base64)
+app.put("/api/user/avatar", async (req, res) => {
+  try {
+    const u = auth(req);
+    const { avatar } = req.body;
+    if (!avatar) return res.status(400).json({ error: "請提供頭像圖片" });
+    // Validate it's a base64 data URL (image)
+    if (!avatar.startsWith("data:image/")) return res.status(400).json({ error: "格式錯誤，請上傳圖片" });
+    // Limit size: base64 of ~500KB image ≈ ~700KB string
+    if (avatar.length > 800000) return res.status(400).json({ error: "圖片過大，請選擇小於 500KB 的圖片" });
+
+    await dbRun("UPDATE users SET avatar = ? WHERE id = ?", [avatar, u.id]);
+    res.json({ ok: true, message: "頭像已更新" });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -2233,6 +2331,11 @@ app.get("/", (req, res) => res.json({
     "/admin/calculate-rebate",
     "/admin/announcement", "/admin/tickets", "/admin/reply-ticket",
     "/admin/templates",
+    // New endpoints
+    "/api/transactions",
+    "/api/user/profile",
+    "/api/user/nickname",
+    "/api/user/avatar",
     // Agent/Partner system (default OFF via feature flag)
     "/agent/dashboard", "/agent/referrals", "/agent/commissions",
     "/admin/agents", "/admin/agents/toggle", "/admin/agents/settlements",

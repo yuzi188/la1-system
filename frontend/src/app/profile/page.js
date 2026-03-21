@@ -247,8 +247,8 @@ export default function ProfilePage() {
       <div style={cardStyle}>
         {[
           { icon: "🎁", label: "活動中心", href: "/activity" },
-          { icon: "📋", label: "交易記錄", href: "https://t.me/LA1111_bot" },
-          { icon: "🔒", label: "安全中心", href: "https://t.me/LA1111_bot" },
+          { icon: "📋", label: "交易記錄", href: "/profile/transactions" },
+          { icon: "🔒", label: "安全中心", href: "/profile/security" },
           { icon: "📞", label: "聯繫客服", href: "/service" },
         ].map((item, i, arr) => (
           <a key={i} href={item.href} target={item.href.startsWith("http") ? "_blank" : undefined} style={{
