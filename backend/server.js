@@ -25,6 +25,8 @@ const initAgentTables = require("./initAgentTables");
 const agentRoutes = require("./routes/agent");
 const adminAgentRoutes = require("./routes/adminAgent");
 const { startSettlementScheduler } = require("./jobs/settlementJob");
+// ── Withdrawal & Security System ───────────────────────────────────────────
+const { router: withdrawalRoutes, initWithdrawalTables } = require("./routes/withdrawal");
 
 // ── Referral Commission System (Production Safe Patch) ─────────────────────
 const initReferralTables = require("./initReferralTables");
@@ -301,6 +303,7 @@ initAgentTables().catch(err => console.error("[AgentTables] Init error:", err.me
 
 // ── Referral commission tables init (IF NOT EXISTS — non-destructive) ──────────
 initReferralTables().catch(err => console.error("[ReferralTables] Init error:", err.message));
+initWithdrawalTables().catch(err => console.error("[WithdrawalTables] Init error:", err.message));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -700,6 +703,10 @@ app.post("/admin/adjust-balance", adminLimiter, async (req, res) => {
       req
     );
 
+    // ── Step 6.1: Audit log ──
+    await dbRun("INSERT INTO audit_logs (admin_id, action, target_type, target_id, details, ip) VALUES (?, ?, 'user', ?, ?, ?)",
+      [adminPayload.id, type === "add" ? "adjust_balance_add" : "adjust_balance_deduct", userId, `${type} ${numAmount}U: ${reason}`, req.headers["x-forwarded-for"] || req.socket.remoteAddress]);
+
     // ── Step 7: TG notifications ──────────────────────────────────────────────
     const updatedUser = await dbGet("SELECT balance FROM users WHERE id = ?", [userId]);
     const finalBalance = updatedUser ? updatedUser.balance : newBalance + (firstDepositBonus || 0);
@@ -784,6 +791,10 @@ app.post("/admin/ban-user", adminLimiter, async (req, res) => {
     const banValue = banned ? 1 : 0;
     const banReason = reason || "";
     await dbRun("UPDATE users SET banned = ?, ban_reason = ? WHERE id = ?", [banValue, banReason, userId]);
+
+    // Audit log
+    await dbRun("INSERT INTO audit_logs (admin_id, action, target_type, target_id, details, ip) VALUES (?, ?, 'user', ?, ?, ?)",
+      [adminAuth(req).id, banned ? 'ban_user' : 'unban_user', userId, banReason, req.headers["x-forwarded-for"] || req.socket.remoteAddress]);
 
     // Notify user via TG
     if (user.tg_id) {
@@ -2526,6 +2537,7 @@ app.put("/api/user/avatar", async (req, res) => {
 // ── Register Agent/Partner routes (additive — no existing routes modified) ──
 app.use(agentRoutes);
 app.use(adminAgentRoutes);
+app.use("/api/withdrawal", withdrawalRoutes);
 
 app.get("/", (req, res) => res.json({
   status: "ok", service: "la1-backend", version: "5.4.0-deposit-fix",
@@ -2858,10 +2870,26 @@ app.post("/api/deposit-request", async (req, res) => {
     const user = await dbGet("SELECT id, username, tg_id FROM users WHERE id = ?", [u.id]);
     if (!user) return res.status(404).json({ error: "用戶不存在" });
 
+    // Create deposit request
     const result = await dbRun(
       "INSERT INTO deposits (user_id, amount, tx_id, screenshot_url, status) VALUES (?, ?, ?, ?, 'pending')",
-      [u.id, numAmount, tx_id || "", screenshot_url || ""]
+      [u.id, numAmount, tx_id || null, screenshot_url || null]
     );
+
+    // ── Deposit Risk Detection ──
+    try {
+      // 1. 大額存款預警 (單筆超過 5000U)
+      if (numAmount >= 5000) {
+        await dbRun("INSERT INTO risk_alerts (user_id, type, level, detail) VALUES (?, '大額存款', '中', ?)",
+          [u.id, `單筆存款金額 ${numAmount} USDT`]);
+      }
+      // 2. 存款來源追蹤 (記錄 IP)
+      const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+      await dbRun("INSERT INTO audit_logs (admin_id, action, target_type, target_id, details, ip) VALUES (0, 'deposit_request', 'user', ?, ?, ?)",
+        [u.id, `申請儲值 ${numAmount} USDT`, ip]);
+    } catch (riskErr) {
+      console.error("[Deposit Risk] error:", riskErr.message);
+    }
     console.log(`[deposit-request] user ${u.id} created deposit #${result.lastID} amount=${numAmount}`);
     res.json({ ok: true, id: result.lastID, amount: numAmount });
   } catch (e) {
