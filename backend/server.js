@@ -2498,29 +2498,71 @@ app.post("/admin/backup-db", adminLimiter, checkRole(["super_admin"]), async (re
       backup.tables.tickets = await dbAll("SELECT * FROM tickets ORDER BY id ASC");
     } catch (e) { backup.tables.tickets = []; }
 
-    // 備份 agents 表（如果存在）
+    // 備份 agents 表
     try {
       backup.tables.agents = await dbAll("SELECT * FROM agents ORDER BY id ASC");
     } catch (e) { backup.tables.agents = []; }
 
-    // 備份 agent_commissions 表（如果存在）
+    // 備份 agent_relations 表
+    try {
+      backup.tables.agent_relations = await dbAll("SELECT * FROM agent_relations ORDER BY id ASC");
+    } catch (e) { backup.tables.agent_relations = []; }
+
+    // 備份 agent_commissions 表
     try {
       backup.tables.agent_commissions = await dbAll("SELECT * FROM agent_commissions ORDER BY id ASC LIMIT 5000");
     } catch (e) { backup.tables.agent_commissions = []; }
 
-    // 備份 referral_commissions 表（如果存在）
+    // 備份 agent_daily_stats 表
+    try {
+      backup.tables.agent_daily_stats = await dbAll("SELECT * FROM agent_daily_stats ORDER BY id ASC LIMIT 1000");
+    } catch (e) { backup.tables.agent_daily_stats = []; }
+
+    // 備份 referral_commissions 表
     try {
       backup.tables.referral_commissions = await dbAll("SELECT * FROM referral_commissions ORDER BY id ASC LIMIT 5000");
     } catch (e) { backup.tables.referral_commissions = []; }
 
+    // 備份 admin_logs 表（最近 500 筆）
+    try {
+      backup.tables.admin_logs = await dbAll("SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT 500");
+    } catch (e) { backup.tables.admin_logs = []; }
+
+    // 備份 message_templates 表
+    try {
+      backup.tables.message_templates = await dbAll("SELECT * FROM message_templates ORDER BY id ASC");
+    } catch (e) { backup.tables.message_templates = []; }
+
+    // 備份 task_claims 表
+    try {
+      backup.tables.task_claims = await dbAll("SELECT * FROM task_claims ORDER BY id ASC LIMIT 5000");
+    } catch (e) { backup.tables.task_claims = []; }
+
+    // 備份 first_deposit_logs 表
+    try {
+      backup.tables.first_deposit_logs = await dbAll("SELECT * FROM first_deposit_logs ORDER BY id ASC");
+    } catch (e) { backup.tables.first_deposit_logs = []; }
+
+    // 備份 blacklist 表
+    try {
+      backup.tables.blacklist = await dbAll("SELECT * FROM blacklist ORDER BY id ASC");
+    } catch (e) { backup.tables.blacklist = []; }
+
     // 統計資訊
     backup.summary = {
       total_users: backup.tables.users.length,
+      total_admins: backup.tables.admins.length,
       total_deposits: backup.tables.deposits.length,
       total_withdrawals: backup.tables.withdrawals.length,
       total_checkins: backup.tables.checkins.length,
       total_balance_logs: backup.tables.balance_logs.length,
       total_referral_logs: backup.tables.referral_logs.length,
+      total_agents: backup.tables.agents.length,
+      total_agent_commissions: backup.tables.agent_commissions.length,
+      total_referral_commissions: backup.tables.referral_commissions.length,
+      total_tickets: backup.tables.tickets.length,
+      total_announcements: backup.tables.announcements.length,
+      total_message_templates: backup.tables.message_templates.length,
     };
 
     await logAdminAction(req.admin.id, "backup_db", "database", { timestamp, summary: backup.summary }, req);
@@ -2556,9 +2598,38 @@ app.get("/admin/backup-db/users", adminLimiter, checkRole(["super_admin", "opera
   }
 });
 
+/**
+ * GET /admin/db-tables
+ * 列出資料庫中所有資料表及其紀錄數，用於驗證所有表格都已正確建立
+ * 僅限 super_admin 使用
+ */
+app.get("/admin/db-tables", adminLimiter, checkRole(["super_admin"]), async (req, res) => {
+  try {
+    const tables = await dbAll(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name ASC"
+    );
+    const result = [];
+    for (const t of tables) {
+      try {
+        const countRow = await dbGet(`SELECT COUNT(*) as cnt FROM "${t.name}"`);
+        result.push({ table: t.name, records: countRow ? countRow.cnt : 0 });
+      } catch (e) {
+        result.push({ table: t.name, records: -1, error: e.message });
+      }
+    }
+    res.json({
+      db_path: require("./models/db").DB_PATH,
+      total_tables: result.length,
+      tables: result
+    });
+  } catch (e) {
+    res.status(500).json({ error: "查詢失敗", detail: e.message });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`LA1 Backend v5.2.0-referral running on port ${PORT}`);
+  console.log(`LA1 Backend v5.3.0-stable running on port ${PORT}`);
   // Restore user data if DB is newly created (Persistent Volume first boot)
   setTimeout(() => {
     seedUsersIfEmpty().catch(err => console.error("[DB] seedUsersIfEmpty failed:", err.message));

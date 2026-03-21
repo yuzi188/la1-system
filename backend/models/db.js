@@ -205,6 +205,80 @@ function initSchema() {
       );
     }
   );
+
+  // ── Agent system tables (also initialized in initAgentTables.js for safety) ──
+
+  // agents table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS agents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER UNIQUE NOT NULL,
+      ratio REAL DEFAULT 0.1,
+      status TEXT DEFAULT 'active',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  );
+
+  // agent_relations table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS agent_relations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      parent_id INTEGER NOT NULL,
+      child_id INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  );
+
+  // agent_commissions table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS agent_commissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      status TEXT DEFAULT 'pending',
+      risk_flag TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+  );
+
+  // agent_daily_stats table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS agent_daily_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id INTEGER NOT NULL,
+      total_amount REAL DEFAULT 0,
+      status TEXT DEFAULT 'pending',
+      date TEXT NOT NULL
+    )`
+  );
+
+  // ── Referral commission table (also initialized in initReferralTables.js) ──
+
+  // referral_commissions table
+  db.run(
+    `CREATE TABLE IF NOT EXISTS referral_commissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      referrer_id INTEGER NOT NULL,
+      referred_id INTEGER NOT NULL,
+      deposit_amount REAL NOT NULL,
+      commission_amount REAL NOT NULL,
+      status TEXT DEFAULT 'pending',
+      wagering_required REAL NOT NULL,
+      wagering_completed REAL DEFAULT 0,
+      deposit_date TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      paid_at DATETIME
+    )`
+  );
+
+  // Indexes for referral_commissions
+  db.run(`CREATE INDEX IF NOT EXISTS idx_ref_commissions_referrer ON referral_commissions(referrer_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_ref_commissions_referred ON referral_commissions(referred_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_ref_commissions_status ON referral_commissions(status)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_ref_commissions_deposit_date ON referral_commissions(deposit_date)`);
+
+  console.log("[DB] initSchema() complete — all tables ensured.");
 }
 
 // ── Data recovery: seed users if DB is newly created ─────────────────────────
