@@ -564,6 +564,7 @@ app.post("/admin/adjust-balance", adminLimiter, async (req, res) => {
   if (!userId || !amount || !type) return res.status(400).json({ error: "缺少必要參數" });
   const numAmount = parseFloat(amount);
   if (isNaN(numAmount) || numAmount <= 0) return res.status(400).json({ error: "金額必須為正數" });
+  if (numAmount > 10000000) return res.status(400).json({ error: "單筆上分/扣分不能超過 10,000,000 USDT" });
   if (type !== "add" && type !== "deduct") return res.status(400).json({ error: "type 必須為 add 或 deduct" });
 
   db.get("SELECT * FROM users WHERE id = ?", [userId], (err, user) => {
