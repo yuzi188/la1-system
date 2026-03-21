@@ -195,6 +195,27 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Game records
+  db.run(`CREATE TABLE IF NOT EXISTS game_records(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    game_type TEXT,
+    bet_amount REAL,
+    result TEXT,
+    win_amount REAL,
+    details TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  // Blackjack active sessions
+  db.run(`CREATE TABLE IF NOT EXISTS blackjack_sessions(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER UNIQUE,
+    session_data TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Tickets table
   db.run(`CREATE TABLE IF NOT EXISTS tickets(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1466,11 +1487,444 @@ app.post("/admin/reply-ticket", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// BLACKJACK GAME ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
+
+const BJ_SUITS = ["spades", "hearts", "diamonds", "clubs"];
+const BJ_RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+const BJ_NUM_DECKS = 6;
+const BJ_BET_OPTIONS = [5, 10, 25, 50, 100];
+
+function bjCreateShoe() {
+  const shoe = [];
+  for (let d = 0; d < BJ_NUM_DECKS; d++) {
+    for (const suit of BJ_SUITS) {
+      for (const rank of BJ_RANKS) {
+        shoe.push({ suit, rank });
+      }
+    }
+  }
+  for (let i = shoe.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
+  }
+  return shoe;
+}
+
+function bjCardValue(card) {
+  if (card.rank === "A") return 11;
+  if (["K", "Q", "J"].includes(card.rank)) return 10;
+  return parseInt(card.rank);
+}
+
+function bjHandValue(cards) {
+  let total = 0, aces = 0;
+  for (const c of cards) { total += bjCardValue(c); if (c.rank === "A") aces++; }
+  while (total > 21 && aces > 0) { total -= 10; aces--; }
+  return total;
+}
+
+function bjIsSoft(cards) {
+  let total = 0, aces = 0;
+  for (const c of cards) { total += bjCardValue(c); if (c.rank === "A") aces++; }
+  while (total > 21 && aces > 0) { total -= 10; aces--; }
+  return aces > 0 && total <= 21;
+}
+
+function bjIsBlackjack(cards) {
+  return cards.length === 2 && bjHandValue(cards) === 21;
+}
+
+function bjCanSplit(hand) {
+  if (hand.cards.length !== 2) return false;
+  return bjCardValue(hand.cards[0]) === bjCardValue(hand.cards[1]);
+}
+
+function bjDrawCard(session) {
+  if (session.shoe.length < 20) session.shoe = bjCreateShoe();
+  return session.shoe.pop();
+}
+
+function bjVisibleCard(card) { return { suit: card.suit, rank: card.rank }; }
+function bjHiddenCard() { return { suit: "hidden", rank: "hidden" }; }
+
+function bjBuildState(session, reveal = false) {
+  const state = {
+    status: session.status,
+    bet_amount: session.betAmount,
+    dealer_cards: [],
+    dealer_value: 0,
+    hands: [],
+    active_hand: session.activeHand,
+    insurance_bet: session.insuranceBet || 0,
+    insurance_result: session.insuranceResult || null,
+    result: session.result || null,
+    total_win: session.totalWin || 0,
+    new_balance: session.newBalance || null,
+    can_insurance: false,
+  };
+  if (session.status === "settled" || reveal) {
+    state.dealer_cards = session.dealerCards.map(bjVisibleCard);
+    state.dealer_value = bjHandValue(session.dealerCards);
+  } else {
+    state.dealer_cards = session.dealerCards.map((c, i) => i === 0 ? bjVisibleCard(c) : bjHiddenCard());
+    state.dealer_value = bjCardValue(session.dealerCards[0]);
+  }
+  for (let i = 0; i < session.hands.length; i++) {
+    const h = session.hands[i];
+    const hv = bjHandValue(h.cards);
+    state.hands.push({
+      cards: h.cards.map(bjVisibleCard),
+      value: hv,
+      bet: h.bet,
+      status: h.status,
+      is_blackjack: bjIsBlackjack(h.cards),
+      is_busted: hv > 21,
+      can_hit: h.status === "playing" && hv < 21,
+      can_stand: h.status === "playing",
+      can_double: h.status === "playing" && h.cards.length === 2 && !h.fromSplit,
+      can_split: h.status === "playing" && bjCanSplit(h) && session.hands.length < 4,
+      can_surrender: h.status === "playing" && h.cards.length === 2 && session.hands.length === 1 && !h.fromSplit,
+      result: h.result || null,
+      win_amount: h.winAmount || 0,
+    });
+  }
+  state.can_insurance = session.status === "playing" &&
+    session.dealerCards[0].rank === "A" &&
+    session.hands.length === 1 &&
+    session.hands[0].cards.length === 2 &&
+    !session.insuranceBet && !session.insuranceDeclined;
+  return state;
+}
+
+async function bjSaveSession(userId, session) {
+  const data = JSON.stringify(session);
+  await dbRun(
+    `INSERT INTO blackjack_sessions (user_id, session_data, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(user_id) DO UPDATE SET session_data = ?, updated_at = datetime('now')`,
+    [userId, data, data]
+  );
+}
+
+async function bjLoadSession(userId) {
+  const row = await dbGet("SELECT session_data FROM blackjack_sessions WHERE user_id = ?", [userId]);
+  if (!row) return null;
+  try { return JSON.parse(row.session_data); } catch { return null; }
+}
+
+async function bjClearSession(userId) {
+  await dbRun("DELETE FROM blackjack_sessions WHERE user_id = ?", [userId]);
+}
+
+function bjDealerPlay(session) {
+  while (true) {
+    const dv = bjHandValue(session.dealerCards);
+    const soft = bjIsSoft(session.dealerCards);
+    if (dv < 17 || (dv === 17 && soft)) {
+      session.dealerCards.push(bjDrawCard(session));
+    } else break;
+  }
+}
+
+function bjAdvanceHand(session) {
+  for (let i = session.activeHand + 1; i < session.hands.length; i++) {
+    if (session.hands[i].status === "playing") {
+      session.activeHand = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+async function bjSettleGame(session, userId) {
+  const dealerValue = bjHandValue(session.dealerCards);
+  const dealerBJ = bjIsBlackjack(session.dealerCards);
+  let totalWin = 0;
+  const results = [];
+
+  for (const hand of session.hands) {
+    if (hand.status === "surrendered") {
+      hand.result = "surrender";
+      hand.winAmount = hand.bet / 2;
+      totalWin += hand.winAmount;
+      results.push("surrender");
+      continue;
+    }
+    const pv = bjHandValue(hand.cards);
+    const pBJ = bjIsBlackjack(hand.cards);
+    if (pv > 21) {
+      hand.result = "bust"; hand.winAmount = 0; results.push("bust");
+    } else if (pBJ && dealerBJ) {
+      hand.result = "push"; hand.winAmount = hand.bet; totalWin += hand.bet; results.push("push");
+    } else if (pBJ) {
+      hand.result = "blackjack"; hand.winAmount = hand.bet + hand.bet * 1.5; totalWin += hand.winAmount; results.push("blackjack");
+    } else if (dealerBJ) {
+      hand.result = "lose"; hand.winAmount = 0; results.push("lose");
+    } else if (dealerValue > 21) {
+      hand.result = "win"; hand.winAmount = hand.bet * 2; totalWin += hand.winAmount; results.push("win");
+    } else if (pv > dealerValue) {
+      hand.result = "win"; hand.winAmount = hand.bet * 2; totalWin += hand.winAmount; results.push("win");
+    } else if (pv === dealerValue) {
+      hand.result = "push"; hand.winAmount = hand.bet; totalWin += hand.bet; results.push("push");
+    } else {
+      hand.result = "lose"; hand.winAmount = 0; results.push("lose");
+    }
+  }
+
+  if (session.insuranceBet > 0) {
+    if (dealerBJ) { session.insuranceResult = "win"; totalWin += session.insuranceBet * 3; }
+    else { session.insuranceResult = "lose"; }
+  }
+
+  session.totalWin = totalWin;
+  session.status = "settled";
+
+  const extraBets = session.extraBetsDeducted || 0;
+  const totalDeducted = session.betAmount + (session.insuranceBet || 0) + extraBets;
+
+  const user = await dbGet("SELECT * FROM users WHERE id = ?", [userId]);
+  if (user) {
+    const newBalance = user.balance + totalWin;
+    session.newBalance = newBalance;
+    await dbRun("UPDATE users SET balance = ? WHERE id = ?", [newBalance, userId]);
+    await dbRun("UPDATE users SET total_bet = total_bet + ? WHERE id = ?", [totalDeducted, userId]);
+    const updatedUser = await dbGet("SELECT * FROM users WHERE id = ?", [userId]);
+    const newVip = getVipLevel(updatedUser.total_bet || 0);
+    if (newVip !== (updatedUser.vip_level || 0)) {
+      await dbRun("UPDATE users SET vip_level = ? WHERE id = ?", [newVip, userId]);
+    }
+    if (updatedUser.wager_requirement > 0) {
+      const newWager = Math.max(0, updatedUser.wager_requirement - totalDeducted);
+      await dbRun("UPDATE users SET wager_requirement = ? WHERE id = ?", [newWager, userId]);
+    }
+  }
+
+  let overallResult = "lose";
+  if (results.includes("blackjack")) overallResult = "blackjack";
+  else if (results.includes("win")) overallResult = "win";
+  else if (results.every(r => r === "push")) overallResult = "push";
+  else if (results.includes("surrender")) overallResult = "surrender";
+  session.result = overallResult;
+
+  const details = JSON.stringify({
+    dealer_cards: session.dealerCards,
+    hands: session.hands.map(h => ({ cards: h.cards, bet: h.bet, result: h.result, winAmount: h.winAmount })),
+    insurance: { bet: session.insuranceBet, result: session.insuranceResult },
+  });
+  await dbRun(
+    "INSERT INTO game_records (user_id, game_type, bet_amount, result, win_amount, details) VALUES (?, ?, ?, ?, ?, ?)",
+    [userId, "blackjack", totalDeducted, overallResult, totalWin, details]
+  );
+  const netWin = totalWin - totalDeducted;
+  if (netWin !== 0) {
+    await dbRun(
+      "INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
+      [userId, netWin > 0 ? "add" : "deduct", Math.abs(netWin), `21點 ${overallResult} (下注${totalDeducted})`, "game"]
+    );
+  }
+  await dbRun(
+    "INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
+    [userId, "bet", totalDeducted, "21點下注", "game"]
+  );
+  await bjClearSession(userId);
+  return session;
+}
+
+// ── POST /game/blackjack/start ──
+app.post("/game/blackjack/start", async (req, res) => {
+  try {
+    const u = auth(req);
+    const user = await dbGet("SELECT * FROM users WHERE id = ?", [u.id]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+    if (user.risk_flag) return res.status(403).json({ error: "帳戶異常" });
+    const { bet_amount } = req.body;
+    if (!BJ_BET_OPTIONS.includes(bet_amount)) {
+      return res.status(400).json({ error: `下注金額必須是 ${BJ_BET_OPTIONS.join("/")} USDT` });
+    }
+    if (user.balance < bet_amount) return res.status(400).json({ error: "餘額不足" });
+    const existing = await bjLoadSession(u.id);
+    if (existing && existing.status !== "settled") {
+      return res.status(400).json({ error: "您有未完成的牌局", state: bjBuildState(existing) });
+    }
+    await dbRun("UPDATE users SET balance = balance - ? WHERE id = ?", [bet_amount, u.id]);
+    const session = {
+      shoe: bjCreateShoe(),
+      dealerCards: [],
+      hands: [{ cards: [], bet: bet_amount, status: "playing", fromSplit: false }],
+      activeHand: 0,
+      betAmount: bet_amount,
+      insuranceBet: 0,
+      insuranceDeclined: false,
+      insuranceResult: null,
+      extraBetsDeducted: 0,
+      status: "playing",
+      result: null,
+      totalWin: 0,
+      newBalance: null,
+    };
+    session.hands[0].cards.push(bjDrawCard(session));
+    session.dealerCards.push(bjDrawCard(session));
+    session.hands[0].cards.push(bjDrawCard(session));
+    session.dealerCards.push(bjDrawCard(session));
+    if (bjIsBlackjack(session.hands[0].cards)) {
+      session.hands[0].status = "blackjack";
+      bjDealerPlay(session);
+      await bjSettleGame(session, u.id);
+      return res.json({ ok: true, state: bjBuildState(session, true) });
+    }
+    const dealerUpCard = session.dealerCards[0];
+    if (bjCardValue(dealerUpCard) === 10 && bjIsBlackjack(session.dealerCards)) {
+      session.hands[0].status = "stand";
+      await bjSettleGame(session, u.id);
+      return res.json({ ok: true, state: bjBuildState(session, true) });
+    }
+    await bjSaveSession(u.id, session);
+    res.json({ ok: true, state: bjBuildState(session) });
+  } catch (e) {
+    console.error("Blackjack start error:", e);
+    if (e.name === "JsonWebTokenError" || e.name === "TokenExpiredError") return res.status(401).json({ error: "未授權" });
+    res.status(500).json({ error: "系統錯誤" });
+  }
+});
+
+// ── POST /game/blackjack/action ──
+app.post("/game/blackjack/action", async (req, res) => {
+  try {
+    const u = auth(req);
+    const session = await bjLoadSession(u.id);
+    if (!session || session.status === "settled") return res.status(400).json({ error: "沒有進行中的牌局" });
+    const { action } = req.body;
+    const hand = session.hands[session.activeHand];
+    if (!hand || hand.status !== "playing") return res.status(400).json({ error: "當前手牌無法操作" });
+    const user = await dbGet("SELECT * FROM users WHERE id = ?", [u.id]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+
+    switch (action) {
+      case "insurance": {
+        if (!bjBuildState(session).can_insurance) return res.status(400).json({ error: "無法購買保險" });
+        const insBet = session.betAmount / 2;
+        if (user.balance < insBet) return res.status(400).json({ error: "餘額不足購買保險" });
+        await dbRun("UPDATE users SET balance = balance - ? WHERE id = ?", [insBet, u.id]);
+        session.insuranceBet = insBet;
+        session.extraBetsDeducted = (session.extraBetsDeducted || 0) + insBet;
+        if (bjIsBlackjack(session.dealerCards)) {
+          hand.status = "stand";
+          await bjSettleGame(session, u.id);
+          return res.json({ ok: true, state: bjBuildState(session, true) });
+        }
+        await bjSaveSession(u.id, session);
+        return res.json({ ok: true, state: bjBuildState(session) });
+      }
+      case "decline_insurance": {
+        session.insuranceDeclined = true;
+        if (bjIsBlackjack(session.dealerCards)) {
+          hand.status = "stand";
+          await bjSettleGame(session, u.id);
+          return res.json({ ok: true, state: bjBuildState(session, true) });
+        }
+        await bjSaveSession(u.id, session);
+        return res.json({ ok: true, state: bjBuildState(session) });
+      }
+      case "hit": {
+        hand.cards.push(bjDrawCard(session));
+        const hv = bjHandValue(hand.cards);
+        if (hv > 21) {
+          hand.status = "busted";
+          if (!bjAdvanceHand(session)) { bjDealerPlay(session); await bjSettleGame(session, u.id); return res.json({ ok: true, state: bjBuildState(session, true) }); }
+        } else if (hv === 21) {
+          hand.status = "stand";
+          if (!bjAdvanceHand(session)) { bjDealerPlay(session); await bjSettleGame(session, u.id); return res.json({ ok: true, state: bjBuildState(session, true) }); }
+        }
+        await bjSaveSession(u.id, session);
+        return res.json({ ok: true, state: bjBuildState(session) });
+      }
+      case "stand": {
+        hand.status = "stand";
+        if (!bjAdvanceHand(session)) { bjDealerPlay(session); await bjSettleGame(session, u.id); return res.json({ ok: true, state: bjBuildState(session, true) }); }
+        await bjSaveSession(u.id, session);
+        return res.json({ ok: true, state: bjBuildState(session) });
+      }
+      case "double": {
+        if (hand.cards.length !== 2 || hand.fromSplit) return res.status(400).json({ error: "無法加倍" });
+        if (user.balance < hand.bet) return res.status(400).json({ error: "餘額不足加倍" });
+        await dbRun("UPDATE users SET balance = balance - ? WHERE id = ?", [hand.bet, u.id]);
+        session.extraBetsDeducted = (session.extraBetsDeducted || 0) + hand.bet;
+        hand.bet *= 2;
+        hand.cards.push(bjDrawCard(session));
+        hand.status = bjHandValue(hand.cards) > 21 ? "busted" : "doubled";
+        if (!bjAdvanceHand(session)) { bjDealerPlay(session); await bjSettleGame(session, u.id); return res.json({ ok: true, state: bjBuildState(session, true) }); }
+        await bjSaveSession(u.id, session);
+        return res.json({ ok: true, state: bjBuildState(session) });
+      }
+      case "split": {
+        if (!bjCanSplit(hand) || session.hands.length >= 4) return res.status(400).json({ error: "無法分牌" });
+        if (user.balance < session.betAmount) return res.status(400).json({ error: "餘額不足分牌" });
+        await dbRun("UPDATE users SET balance = balance - ? WHERE id = ?", [session.betAmount, u.id]);
+        session.extraBetsDeducted = (session.extraBetsDeducted || 0) + session.betAmount;
+        const card2 = hand.cards.pop();
+        hand.fromSplit = true;
+        hand.cards.push(bjDrawCard(session));
+        const newHand = { cards: [card2, bjDrawCard(session)], bet: session.betAmount, status: "playing", fromSplit: true };
+        session.hands.splice(session.activeHand + 1, 0, newHand);
+        if (bjHandValue(hand.cards) === 21) {
+          hand.status = "stand";
+          if (!bjAdvanceHand(session)) { bjDealerPlay(session); await bjSettleGame(session, u.id); return res.json({ ok: true, state: bjBuildState(session, true) }); }
+        }
+        await bjSaveSession(u.id, session);
+        return res.json({ ok: true, state: bjBuildState(session) });
+      }
+      case "surrender": {
+        if (hand.cards.length !== 2 || session.hands.length !== 1 || hand.fromSplit) return res.status(400).json({ error: "無法投降" });
+        hand.status = "surrendered";
+        hand.bet = hand.bet / 2;
+        bjDealerPlay(session);
+        await bjSettleGame(session, u.id);
+        return res.json({ ok: true, state: bjBuildState(session, true) });
+      }
+      default:
+        return res.status(400).json({ error: "未知操作" });
+    }
+  } catch (e) {
+    console.error("Blackjack action error:", e);
+    if (e.name === "JsonWebTokenError" || e.name === "TokenExpiredError") return res.status(401).json({ error: "未授權" });
+    res.status(500).json({ error: "系統錯誤" });
+  }
+});
+
+// ── GET /game/blackjack/state ──
+app.get("/game/blackjack/state", async (req, res) => {
+  try {
+    const u = auth(req);
+    const session = await bjLoadSession(u.id);
+    if (!session || session.status === "settled") return res.json({ active: false });
+    res.json({ active: true, state: bjBuildState(session) });
+  } catch (e) {
+    if (e.name === "JsonWebTokenError" || e.name === "TokenExpiredError") return res.status(401).json({ error: "未授權" });
+    res.status(500).json({ error: "系統錯誤" });
+  }
+});
+
+// ── GET /game/blackjack/history ──
+app.get("/game/blackjack/history", async (req, res) => {
+  try {
+    const u = auth(req);
+    const rows = await dbAll(
+      "SELECT id, bet_amount, result, win_amount, created_at FROM game_records WHERE user_id = ? AND game_type = 'blackjack' ORDER BY created_at DESC LIMIT 20",
+      [u.id]
+    );
+    res.json(rows);
+  } catch (e) {
+    if (e.name === "JsonWebTokenError" || e.name === "TokenExpiredError") return res.status(401).json({ error: "未授權" });
+    res.status(500).json({ error: "系統錯誤" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ══════════════════════════════════════════════════════════════════════════════
 
 app.get("/", (req, res) => res.json({
-  status: "ok", service: "la1-backend", version: "4.0.0",
+  status: "ok", service: "la1-backend", version: "4.1.0",
   endpoints: [
     "/tg-login", "/login", "/register", "/me",
     "/withdraw", "/withdraw/history",
