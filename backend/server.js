@@ -56,7 +56,7 @@ const adminLimiter = rateLimit({
 
 const db = new sqlite3.Database("./db.sqlite");
 const JWT_SECRET = process.env.JWT_SECRET || "la1_secret_2026";
-const BOT_TOKEN = process.env.BOT_TOKEN || "8796143383:AAEEz61fx2cctWb2xDGzxgHBVrIfUISfW8M";
+const BOT_TOKEN = process.env.BOT_TOKEN || "8796143383:AAHkbw_msst7ps7lt__cRlBwn7yhp82mv1U";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "585858";
 const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || "la1_admin_secret_2026";
 const SITE_URL = process.env.SITE_URL || "https://la1-website-production.up.railway.app";
