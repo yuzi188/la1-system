@@ -2,12 +2,17 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const sqlite3 = require("sqlite3").verbose();
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const rateLimit = require("express-rate-limit");
+
+// ── Feature #1: Unified DB instance ─────────────────────────────────────────
+const { db, dbGet, dbAll, dbRun, initSchema } = require("./models/db");
+
+// ── Push job & services ─────────────────────────────────────────────────────
+const { startPushJob } = require("./jobs/pushJob");
 
 const app = express();
 app.use(cors());
@@ -54,9 +59,6 @@ const adminLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const DB_PATH = process.env.DB_PATH || "./db.sqlite";
-console.log("[DB] Using database path:", DB_PATH);
-const db = new sqlite3.Database(DB_PATH);
 const JWT_SECRET = process.env.JWT_SECRET || "la1_secret_2026";
 const BOT_TOKEN = process.env.BOT_TOKEN || "8796143383:AAHkbw_msst7ps7lt__cRlBwn7yhp82mv1U";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "585858";
@@ -244,11 +246,23 @@ db.serialize(() => {
     "risk_flag INTEGER DEFAULT 0",
     "banned INTEGER DEFAULT 0",
     "ban_reason TEXT DEFAULT ''",
+    // ── New columns for push system ──
+    "daily_push_count INTEGER DEFAULT 0",
+    "last_push_at DATETIME",
+    "last_push_date TEXT",
+    "last_trigger TEXT",
+    "opt_out INTEGER DEFAULT 0",
+    "last_login DATETIME",
+    "last_deposit_at DATETIME",
+    "is_agent INTEGER DEFAULT 0",
   ];
   newCols.forEach(col => {
     const colName = col.split(" ")[0];
     db.run(`ALTER TABLE users ADD COLUMN ${col}`, () => {});
   });
+
+  // Feature #6: Initialize message_templates table + seed data (from models/db.js)
+  initSchema();
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -269,19 +283,24 @@ function adminAuth(req) {
   return payload;
 }
 
+// Feature #4: TG helpers wrapped in try/catch (never throw)
 function sendTG(msg) {
   if (process.env.TG_TOKEN && process.env.TG_ID) {
-    axios.get(`https://api.telegram.org/bot${process.env.TG_TOKEN}/sendMessage`, {
-      params: { chat_id: process.env.TG_ID, text: msg }
-    }).catch(() => {});
+    try {
+      axios.get(`https://api.telegram.org/bot${process.env.TG_TOKEN}/sendMessage`, {
+        params: { chat_id: process.env.TG_ID, text: msg }
+      }).catch(() => {});
+    } catch (e) { console.error("[sendTG] error:", e.message); }
   }
 }
 
 function sendTGToUser(tg_id, msg) {
   if (!tg_id) return;
-  axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    params: { chat_id: tg_id, text: msg, parse_mode: "HTML" }
-  }).catch(() => {});
+  try {
+    axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      params: { chat_id: tg_id, text: msg, parse_mode: "HTML" }
+    }).catch(() => {});
+  } catch (e) { console.error("[sendTGToUser] error:", e.message); }
 }
 
 function generateInviteCode() {
@@ -297,23 +316,7 @@ function isWeekend() {
   return day === 0 || day === 6;
 }
 
-function dbGet(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => err ? reject(err) : resolve(row));
-  });
-}
-
-function dbAll(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows || []));
-  });
-}
-
-function dbRun(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function(err) { err ? reject(err) : resolve(this); });
-  });
-}
+// dbGet, dbAll, dbRun are now imported from models/db.js (Feature #1)
 
 // Feature #8: Check if user is banned (middleware helper)
 async function checkBanned(userId) {
@@ -1922,11 +1925,75 @@ app.get("/game/blackjack/history", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// PUSH OPT-OUT: /stop
+// ══════════════════════════════════════════════════════════════════════════════
+
+app.post("/stop", async (req, res) => {
+  try {
+    const u = auth(req);
+    await dbRun("UPDATE users SET opt_out = 1 WHERE id = ?", [u.id]);
+    res.json({ ok: true, message: "已關閉推送通知，您將不再收到自動訊息。" });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+app.post("/start-push", async (req, res) => {
+  try {
+    const u = auth(req);
+    await dbRun("UPDATE users SET opt_out = 0 WHERE id = ?", [u.id]);
+    res.json({ ok: true, message: "已重新開啟推送通知。" });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ADMIN: MESSAGE TEMPLATES CRUD
+// ══════════════════════════════════════════════════════════════════════════════
+
+app.get("/admin/templates", adminLimiter, async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  try {
+    const rows = await dbAll("SELECT * FROM message_templates ORDER BY trigger, lang");
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: "查詢失敗" });
+  }
+});
+
+app.post("/admin/templates", adminLimiter, async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  const { trigger, content, lang } = req.body;
+  if (!trigger || !content) return res.status(400).json({ error: "缺少 trigger 或 content" });
+  try {
+    await dbRun(
+      `INSERT INTO message_templates (trigger, content, lang) VALUES (?, ?, ?)
+       ON CONFLICT(trigger, lang) DO UPDATE SET content = ?`,
+      [trigger, content, lang || "zh", content]
+    );
+    res.json({ ok: true, message: "模板已儲存" });
+  } catch (e) {
+    res.status(500).json({ error: "儲存失敗" });
+  }
+});
+
+app.delete("/admin/templates/:id", adminLimiter, async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  try {
+    await dbRun("DELETE FROM message_templates WHERE id = ?", [req.params.id]);
+    res.json({ ok: true, message: "模板已刪除" });
+  } catch (e) {
+    res.status(500).json({ error: "刪除失敗" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ══════════════════════════════════════════════════════════════════════════════
 
 app.get("/", (req, res) => res.json({
-  status: "ok", service: "la1-backend", version: "4.1.0",
+  status: "ok", service: "la1-backend", version: "5.0.0",
   endpoints: [
     "/tg-login", "/login", "/register", "/me",
     "/withdraw", "/withdraw/history",
@@ -1934,12 +2001,18 @@ app.get("/", (req, res) => res.json({
     "/promo/vip-info", "/promo/referral-info", "/promo/tasks", "/promo/claim-task",
     "/promo/weekend-status", "/promo/summary", "/promo/rebate-history",
     "/announcements", "/ticket", "/my-tickets",
+    "/stop", "/start-push",
     "/admin/login", "/admin/users", "/admin/adjust-balance", "/admin/flag-user",
     "/admin/ban-user", "/admin/withdrawals", "/admin/review-withdrawal",
     "/admin/calculate-rebate",
     "/admin/announcement", "/admin/tickets", "/admin/reply-ticket",
+    "/admin/templates",
   ]
 }));
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`LA1 Backend v4.0 running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`LA1 Backend v5.0 running on port ${PORT}`);
+  // Start the hourly push job
+  startPushJob();
+});

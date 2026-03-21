@@ -1,15 +1,16 @@
 const TelegramBot = require("node-telegram-bot-api");
-const sqlite3 = require("sqlite3").verbose();
 const crypto = require("crypto");
 require("dotenv").config();
 
-const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TG_TOKEN || "8796143383:AAEEz61fx2cctWb2xDGzxgHBVrIfUISfW8M";
+// Feature #1: Use unified DB instance from models/db.js
+const { db, dbGet, dbAll, dbRun } = require("./models/db");
+
+const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TG_TOKEN || "8796143383:AAHkbw_msst7ps7lt__cRlBwn7yhp82mv1U";
 const SITE_URL = process.env.SITE_URL || "https://la1-website-production.up.railway.app";
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-const db = new sqlite3.Database("./db.sqlite");
 
-// ── Ensure tables exist ─────────────────────────────────────────────────────
+// ── Ensure leads table exists ───────────────────────────────────────────────────
 
 db.run(`CREATE TABLE IF NOT EXISTS leads(
   id INTEGER PRIMARY KEY,
@@ -18,26 +19,6 @@ db.run(`CREATE TABLE IF NOT EXISTS leads(
   status TEXT DEFAULT 'new',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`);
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function dbGet(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => err ? reject(err) : resolve(row));
-  });
-}
-
-function dbAll(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows || []));
-  });
-}
-
-function dbRun(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function(err) { err ? reject(err) : resolve(this); });
-  });
-}
 
 function getToday() {
   return new Date().toISOString().split("T")[0];
@@ -114,6 +95,10 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
     }
   }
 
+  // Reset opt_out when user sends /start (re-subscribe)
+  const tgIdStr = chatId.toString();
+  db.run("UPDATE users SET opt_out = 0 WHERE tg_id = ?", [tgIdStr], () => {});
+
   bot.sendMessage(chatId,
 `🔥 <b>歡迎來到 LA1 AI 娛樂平台</b>
 
@@ -124,6 +109,7 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
 /vip — 👑 查看 VIP 等級
 /invite — 🤝 邀請好友（賺佣金）
 /bonus — 🎁 查看可領獎勵
+/stop — 🔕 關閉推送通知
 
 1️⃣ 新手教學
 2️⃣ 今日推薦
@@ -380,8 +366,26 @@ ${SITE_URL}/activity`, { parse_mode: "HTML" });
     bot.sendMessage(chatId, "❌ 查詢失敗，請稍後再試");
   }
 });
+// ── /stop — 關閉推送通知 ──────────────────────────────────────────────────────────────
 
-// ── Number menu (existing CRM) ──────────────────────────────────────────────
+bot.onText(/\/stop/, async (msg) => {
+  const chatId = msg.chat.id;
+  try {
+    const tgId = chatId.toString();
+    const user = await dbGet("SELECT * FROM users WHERE tg_id = ?", [tgId]);
+    if (user) {
+      await dbRun("UPDATE users SET opt_out = 1 WHERE tg_id = ?", [tgId]);
+      bot.sendMessage(chatId, "✅ 已關閉推送通知。\n\n如需重新開啟，請發送 /start");
+    } else {
+      bot.sendMessage(chatId, "❗ 您尚未註冊，請先發送 /start 開始使用。");
+    }
+  } catch (e) {
+    console.error("Stop error:", e);
+    bot.sendMessage(chatId, "❌ 操作失敗，請稍後再試");
+  }
+});
+
+// ── Number menu (existing CRM) ──────────────────────────────────────────────────
 
 bot.on("message", (msg) => {
   const text = msg.text;
