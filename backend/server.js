@@ -2522,7 +2522,7 @@ app.use(agentRoutes);
 app.use(adminAgentRoutes);
 
 app.get("/", (req, res) => res.json({
-  status: "ok", service: "la1-backend", version: "5.1.0-agent",
+  status: "ok", service: "la1-backend", version: "5.4.0-deposit-fix",
   endpoints: [
     "/tg-login", "/login", "/register", "/me",
     "/withdraw", "/withdraw/history",
