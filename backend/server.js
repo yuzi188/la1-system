@@ -380,8 +380,7 @@ const CHECKIN_REWARDS = [0.5, 0.5, 1, 1, 1.5, 1.5, 3];
 
 // First deposit bonus config
 const FIRST_DEPOSIT_TIERS = [
-  { min: 100, bonus: 38, wagerMultiplier: 10 },
-  { min: 30, bonus: 10, wagerMultiplier: 8 },
+  { min: 500, bonusRate: 0.33, wagerMultiplier: 10 },
 ];
 
 function getVipLevel(totalBet) {
@@ -1101,19 +1100,20 @@ app.post("/promo/first-deposit", async (req, res) => {
     }
     if (!tier) return res.json({ error: `首充金額不足，最低 ${FIRST_DEPOSIT_TIERS[FIRST_DEPOSIT_TIERS.length - 1].min} USDT` });
 
-    const wagerReq = (user.total_deposit + tier.bonus) * tier.wagerMultiplier;
+    const bonusAmount = Math.floor(user.total_deposit * tier.bonusRate);
+    const wagerReq = (user.total_deposit + bonusAmount) * tier.wagerMultiplier;
     await dbRun("UPDATE users SET balance = balance + ?, first_deposit_claimed = 1, wager_requirement = wager_requirement + ? WHERE id = ?",
-      [tier.bonus, wagerReq, u.id]);
+      [bonusAmount, wagerReq, u.id]);
     await dbRun("INSERT INTO first_deposit_logs (user_id, deposit_amount, bonus_amount, wager_multiplier) VALUES (?, ?, ?, ?)",
-      [u.id, user.total_deposit, tier.bonus, tier.wagerMultiplier]);
+      [u.id, user.total_deposit, bonusAmount, tier.wagerMultiplier]);
     await dbRun("INSERT INTO balance_logs (user_id, type, amount, reason, wager_req, operator) VALUES (?, ?, ?, ?, ?, ?)",
-      [u.id, "add", tier.bonus, `首充獎勵（充${user.total_deposit}送${tier.bonus}）`, wagerReq, "system"]);
+      [u.id, "add", bonusAmount, `首充獎勵（充${user.total_deposit}送${bonusAmount}）`, wagerReq, "system"]);
 
     if (user.tg_id) {
-      sendTGToUser(user.tg_id, `🎁 <b>首充獎勵已到帳！</b>\n\n💰 獎勵金額：<b>${tier.bonus} USDT</b>\n🎯 流水要求：${tier.wagerMultiplier} 倍（${wagerReq.toFixed(0)} USDT）\n\n祝您好運！🍀`);
+      sendTGToUser(user.tg_id, `🎁 <b>首充獎勵已到帳！</b>\n\n💰 獎勵金額：<b>${bonusAmount} USDT</b>\n🎯 流水要求：${tier.wagerMultiplier} 倍（${wagerReq.toFixed(0)} USDT）\n\n祝您好運！🍀`);
     }
 
-    res.json({ ok: true, bonus: tier.bonus, wagerMultiplier: tier.wagerMultiplier, wagerReq });
+    res.json({ ok: true, bonus: bonusAmount, wagerMultiplier: tier.wagerMultiplier, wagerReq });
   } catch (e) {
     res.status(500).json({ error: "系統錯誤" });
   }
