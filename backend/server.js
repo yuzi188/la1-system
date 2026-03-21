@@ -6,10 +6,53 @@ const sqlite3 = require("sqlite3").verbose();
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
 const crypto = require("crypto");
+const bcrypt = require("bcryptjs");
+const rateLimit = require("express-rate-limit");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RATE LIMITING (Feature #5)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// General API: 60 requests per IP per minute
+const generalLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 60,
+  message: { error: "請求過於頻繁，請稍後再試" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(generalLimiter);
+
+// Login API: 10 requests per IP per 15 minutes
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: "登入嘗試過多，請 15 分鐘後再試" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Register API: 5 requests per IP per hour
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { error: "註冊請求過多，請 1 小時後再試" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Admin API: 20 requests per IP per 15 minutes
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: "後台請求過多，請稍後再試" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 const db = new sqlite3.Database("./db.sqlite");
 const JWT_SECRET = process.env.JWT_SECRET || "la1_secret_2026";
@@ -44,6 +87,8 @@ db.serialize(() => {
     invite_earnings REAL DEFAULT 0,
     wager_requirement REAL DEFAULT 0,
     risk_flag INTEGER DEFAULT 0,
+    banned INTEGER DEFAULT 0,
+    ban_reason TEXT DEFAULT '',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
@@ -115,6 +160,30 @@ db.serialize(() => {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  // Feature #3: Withdrawals table
+  db.run(`CREATE TABLE IF NOT EXISTS withdrawals(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    amount REAL,
+    status TEXT DEFAULT 'pending',
+    wallet_address TEXT,
+    reviewed_by TEXT DEFAULT '',
+    reject_reason TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at DATETIME
+  )`);
+
+  // Feature #12: Rebate logs table
+  db.run(`CREATE TABLE IF NOT EXISTS rebate_logs(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    amount REAL,
+    vip_level INTEGER,
+    bet_amount REAL,
+    period TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   // Add missing columns to existing users table (safe to run multiple times)
   const newCols = [
     "vip_level INTEGER DEFAULT 0",
@@ -127,6 +196,8 @@ db.serialize(() => {
     "invite_earnings REAL DEFAULT 0",
     "wager_requirement REAL DEFAULT 0",
     "risk_flag INTEGER DEFAULT 0",
+    "banned INTEGER DEFAULT 0",
+    "ban_reason TEXT DEFAULT ''",
   ];
   newCols.forEach(col => {
     const colName = col.split(" ")[0];
@@ -198,6 +269,15 @@ function dbRun(sql, params = []) {
   });
 }
 
+// Feature #8: Check if user is banned (middleware helper)
+async function checkBanned(userId) {
+  const user = await dbGet("SELECT banned, ban_reason FROM users WHERE id = ?", [userId]);
+  if (user && user.banned) {
+    return { banned: true, reason: user.ban_reason || "帳戶已被封禁" };
+  }
+  return { banned: false };
+}
+
 // VIP Config
 const VIP_CONFIG = [
   { level: 0, name: "普通會員", minBet: 0, rebate: 0 },
@@ -251,7 +331,7 @@ function verifyTelegramInitData(initData, botToken) {
 // ADMIN AUTH
 // ══════════════════════════════════════════════════════════════════════════════
 
-app.post("/admin/login", (req, res) => {
+app.post("/admin/login", adminLimiter, (req, res) => {
   const { password } = req.body;
   if (!password) return res.status(400).json({ error: "請輸入密碼" });
   if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: "密碼錯誤" });
@@ -259,17 +339,25 @@ app.post("/admin/login", (req, res) => {
   res.json({ token, ok: true });
 });
 
-app.get("/admin/users", async (req, res) => {
+app.get("/admin/users", adminLimiter, async (req, res) => {
   try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
   const q = req.query.q ? `%${req.query.q}%` : null;
   const sql = q
     ? `SELECT * FROM users WHERE username LIKE ? OR tg_id LIKE ? OR tg_username LIKE ? OR tg_first_name LIKE ? ORDER BY created_at DESC`
     : `SELECT * FROM users ORDER BY created_at DESC`;
   const params = q ? [q, q, q, q] : [];
-  db.all(sql, params, (e, rows) => res.json(rows || []));
+  db.all(sql, params, (e, rows) => {
+    // Include banned status in response
+    const users = (rows || []).map(u => ({
+      ...u,
+      banned: u.banned || 0,
+      ban_reason: u.ban_reason || "",
+    }));
+    res.json(users);
+  });
 });
 
-app.post("/admin/adjust-balance", async (req, res) => {
+app.post("/admin/adjust-balance", adminLimiter, async (req, res) => {
   try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
   const { userId, amount, type, reason } = req.body;
   if (!userId || !amount || !type) return res.status(400).json({ error: "缺少必要參數" });
@@ -287,6 +375,7 @@ app.post("/admin/adjust-balance", async (req, res) => {
       db.run("INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
         [userId, type, numAmount, reason || "", "admin"]);
 
+      // Feature #6: TG notification for deposit (type=add)
       if (user.tg_id) {
         const displayName = user.tg_first_name || user.tg_username || user.username;
         const actionText = type === "add" ? "充值" : "扣款";
@@ -294,24 +383,24 @@ app.post("/admin/adjust-balance", async (req, res) => {
         const msg = `${emoji} <b>帳戶${actionText}通知</b>\n\n親愛的 ${displayName}，\n您的帳戶已${type === "add" ? "充值" : "扣除"} <b>${numAmount.toFixed(2)} USDT</b>\n💼 當前餘額：<b>${newBalance.toFixed(2)} USDT</b>${reason ? `\n📝 備註：${reason}` : ""}\n\n如有疑問請聯繫客服 @LA1111_bot`;
         sendTGToUser(user.tg_id, msg);
       }
-      sendTG(`${type === "add" ? "⬆️ 上分" : "⬇️ 扣分"} | ${user.tg_username || user.username} | ${numAmount} | 餘額：${newBalance.toFixed(2)}`);
+      sendTG(`${type === "add" ? "⬆️ 上分" : "⬇️ 扣分"} | ${user.tg_username || user.username} | ${numAmount} USDT | 餘額: ${newBalance.toFixed(2)}`);
       res.json({ ok: true, newBalance, message: `${type === "add" ? "上分" : "扣分"}成功` });
     });
   });
 });
 
-app.get("/admin/balance-logs", (req, res) => {
+app.get("/admin/balance-logs", adminLimiter, (req, res) => {
   try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
   db.all(`SELECT bl.*, u.username, u.tg_username, u.tg_first_name FROM balance_logs bl LEFT JOIN users u ON bl.user_id = u.id ORDER BY bl.created_at DESC LIMIT 200`, (e, rows) => res.json(rows || []));
 });
 
-app.get("/admin/deposits", (req, res) => {
+app.get("/admin/deposits", adminLimiter, (req, res) => {
   try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
   db.all("SELECT * FROM deposits ORDER BY id DESC", (e, rows) => res.json(rows || []));
 });
 
 // Admin: flag user for risk
-app.post("/admin/flag-user", (req, res) => {
+app.post("/admin/flag-user", adminLimiter, (req, res) => {
   try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
   const { userId, flag } = req.body;
   db.run("UPDATE users SET risk_flag = ? WHERE id = ?", [flag ? 1 : 0, userId], (err) => {
@@ -321,10 +410,186 @@ app.post("/admin/flag-user", (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Feature #8: BAN / UNBAN USER
+// ══════════════════════════════════════════════════════════════════════════════
+
+app.post("/admin/ban-user", adminLimiter, async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  const { userId, banned, reason } = req.body;
+  if (!userId || banned === undefined) return res.status(400).json({ error: "缺少必要參數" });
+
+  try {
+    const user = await dbGet("SELECT * FROM users WHERE id = ?", [userId]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+
+    const banValue = banned ? 1 : 0;
+    const banReason = reason || "";
+    await dbRun("UPDATE users SET banned = ?, ban_reason = ? WHERE id = ?", [banValue, banReason, userId]);
+
+    // Notify user via TG
+    if (user.tg_id) {
+      if (banned) {
+        sendTGToUser(user.tg_id, `🚫 <b>帳戶封禁通知</b>\n\n您的帳戶已被封禁。\n📝 原因：${banReason || "違規操作"}\n\n如有疑問請聯繫客服 @LA1111_bot`);
+      } else {
+        sendTGToUser(user.tg_id, `✅ <b>帳戶解封通知</b>\n\n您的帳戶已解除封禁，可正常使用。\n\n感謝您的配合！`);
+      }
+    }
+
+    sendTG(`${banned ? "🚫 封號" : "✅ 解封"} | ${user.tg_username || user.username} | ${banReason}`);
+    res.json({ ok: true, message: banned ? "已封號" : "已解封" });
+  } catch (e) {
+    res.status(500).json({ error: "操作失敗" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Feature #3: WITHDRAWAL REVIEW SYSTEM
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Admin: Get withdrawal list
+app.get("/admin/withdrawals", adminLimiter, async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  try {
+    const status = req.query.status; // pending, approved, rejected
+    let sql = `SELECT w.*, u.username, u.tg_username, u.tg_first_name, u.balance, u.tg_id
+               FROM withdrawals w LEFT JOIN users u ON w.user_id = u.id`;
+    const params = [];
+    if (status && ["pending", "approved", "rejected"].includes(status)) {
+      sql += " WHERE w.status = ?";
+      params.push(status);
+    }
+    sql += " ORDER BY w.created_at DESC LIMIT 200";
+    const rows = await dbAll(sql, params);
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: "查詢失敗" });
+  }
+});
+
+// Admin: Review withdrawal (approve/reject)
+app.post("/admin/review-withdrawal", adminLimiter, async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  const { withdrawalId, action, reason } = req.body;
+  if (!withdrawalId || !action) return res.status(400).json({ error: "缺少必要參數" });
+  if (action !== "approve" && action !== "reject") return res.status(400).json({ error: "action 必須為 approve 或 reject" });
+
+  try {
+    const withdrawal = await dbGet("SELECT * FROM withdrawals WHERE id = ?", [withdrawalId]);
+    if (!withdrawal) return res.status(404).json({ error: "提款記錄不存在" });
+    if (withdrawal.status !== "pending") return res.status(400).json({ error: "該提款已被處理" });
+
+    const user = await dbGet("SELECT * FROM users WHERE id = ?", [withdrawal.user_id]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+
+    if (action === "approve") {
+      // Deduct balance
+      if (user.balance < withdrawal.amount) {
+        return res.status(400).json({ error: `用戶餘額不足，當前：${user.balance.toFixed(2)}` });
+      }
+      const newBalance = user.balance - withdrawal.amount;
+      await dbRun("UPDATE users SET balance = ? WHERE id = ?", [newBalance, withdrawal.user_id]);
+      await dbRun("UPDATE withdrawals SET status = 'approved', reviewed_by = 'admin', reviewed_at = datetime('now') WHERE id = ?", [withdrawalId]);
+      await dbRun("INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
+        [withdrawal.user_id, "deduct", withdrawal.amount, `提款審核通過（${withdrawal.wallet_address}）`, "admin"]);
+
+      // Feature #7: TG notification for approved withdrawal
+      if (user.tg_id) {
+        const displayName = user.tg_first_name || user.tg_username || user.username;
+        sendTGToUser(user.tg_id, `✅ <b>提款到帳通知</b>\n\n親愛的 ${displayName}，\n您的提款申請已通過！\n\n💸 提款金額：<b>${withdrawal.amount.toFixed(2)} USDT</b>\n💼 當前餘額：<b>${newBalance.toFixed(2)} USDT</b>\n📬 錢包地址：${withdrawal.wallet_address}\n\n資金將在 24 小時內到帳，如有疑問請聯繫客服 @LA1111_bot`);
+      }
+      sendTG(`✅ 提款通過 | ${user.tg_username || user.username} | ${withdrawal.amount} USDT | 地址: ${withdrawal.wallet_address}`);
+      res.json({ ok: true, message: "提款已批准", newBalance });
+    } else {
+      // Reject - no balance deduction needed (balance was not held)
+      const rejectReason = reason || "審核未通過";
+      await dbRun("UPDATE withdrawals SET status = 'rejected', reviewed_by = 'admin', reject_reason = ?, reviewed_at = datetime('now') WHERE id = ?", [rejectReason, withdrawalId]);
+
+      // Feature #7: TG notification for rejected withdrawal
+      if (user.tg_id) {
+        const displayName = user.tg_first_name || user.tg_username || user.username;
+        sendTGToUser(user.tg_id, `❌ <b>提款申請被拒絕</b>\n\n親愛的 ${displayName}，\n您的提款申請未通過審核。\n\n💸 申請金額：<b>${withdrawal.amount.toFixed(2)} USDT</b>\n📝 原因：${rejectReason}\n💼 當前餘額：<b>${user.balance.toFixed(2)} USDT</b>\n\n如有疑問請聯繫客服 @LA1111_bot`);
+      }
+      sendTG(`❌ 提款拒絕 | ${user.tg_username || user.username} | ${withdrawal.amount} USDT | 原因: ${rejectReason}`);
+      res.json({ ok: true, message: "提款已拒絕" });
+    }
+  } catch (e) {
+    console.error("Review withdrawal error:", e);
+    res.status(500).json({ error: "操作失敗" });
+  }
+});
+
+// Feature #12: Admin calculate rebate
+app.post("/admin/calculate-rebate", adminLimiter, async (req, res) => {
+  try { adminAuth(req); } catch (e) { return res.status(401).json({ error: "未授權" }); }
+  try {
+    const today = getToday();
+    const period = req.body.period || today;
+
+    // Check if rebate already calculated for this period
+    const existing = await dbGet("SELECT COUNT(*) as cnt FROM rebate_logs WHERE period = ?", [period]);
+    if (existing && existing.cnt > 0) {
+      return res.status(400).json({ error: `${period} 的返水已計算過` });
+    }
+
+    // Get all users with bets
+    const users = await dbAll("SELECT * FROM users WHERE total_bet > 0");
+    let totalRebate = 0;
+    let processedCount = 0;
+
+    for (const user of users) {
+      const vipLevel = getVipLevel(user.total_bet || 0);
+      const vipConfig = VIP_CONFIG[vipLevel];
+      if (!vipConfig || vipConfig.rebate <= 0) continue;
+
+      // Calculate bet amount for the period (from balance_logs)
+      const betData = await dbGet(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM balance_logs WHERE user_id = ? AND type = 'bet' AND date(created_at) = ?",
+        [user.id, period]
+      );
+      const periodBet = betData?.total || 0;
+      if (periodBet <= 0) continue;
+
+      // Weekend bonus
+      const periodDate = new Date(period);
+      const dayOfWeek = periodDate.getDay();
+      const isWeekendDay = dayOfWeek === 0 || dayOfWeek === 6;
+      let rebateRate = vipConfig.rebate;
+      if (isWeekendDay && vipLevel >= 2) {
+        rebateRate = rebateRate * 1.3; // 30% weekend bonus
+      }
+
+      const rebateAmount = parseFloat((periodBet * rebateRate).toFixed(2));
+      if (rebateAmount <= 0) continue;
+
+      // Add rebate to user balance
+      await dbRun("UPDATE users SET balance = balance + ? WHERE id = ?", [rebateAmount, user.id]);
+      await dbRun("INSERT INTO rebate_logs (user_id, amount, vip_level, bet_amount, period) VALUES (?, ?, ?, ?, ?)",
+        [user.id, rebateAmount, vipLevel, periodBet, period]);
+      await dbRun("INSERT INTO balance_logs (user_id, type, amount, reason, operator) VALUES (?, ?, ?, ?, ?)",
+        [user.id, "add", rebateAmount, `VIP${vipLevel} 返水（投注 ${periodBet.toFixed(2)}，比例 ${(rebateRate * 100).toFixed(2)}%）`, "system"]);
+
+      // Notify user
+      if (user.tg_id) {
+        sendTGToUser(user.tg_id, `🎁 <b>返水到帳通知</b>\n\n💰 返水金額：<b>${rebateAmount.toFixed(2)} USDT</b>\n🎰 投注額：${periodBet.toFixed(2)} USDT\n👑 VIP 等級：${vipConfig.name}\n📊 返水比例：${(rebateRate * 100).toFixed(2)}%\n📅 期間：${period}\n\n繼續遊戲享受更多返水！🔥`);
+      }
+
+      totalRebate += rebateAmount;
+      processedCount++;
+    }
+
+    sendTG(`📊 返水結算完成 | 期間: ${period} | 人數: ${processedCount} | 總額: ${totalRebate.toFixed(2)} USDT`);
+    res.json({ ok: true, period, processedCount, totalRebate: totalRebate.toFixed(2) });
+  } catch (e) {
+    console.error("Calculate rebate error:", e);
+    res.status(500).json({ error: "返水計算失敗" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // TG LOGIN
 // ══════════════════════════════════════════════════════════════════════════════
 
-app.post("/tg-login", (req, res) => {
+app.post("/tg-login", loginLimiter, (req, res) => {
   const { initData } = req.body;
   if (!initData) return res.json({ error: "缺少 initData" });
   const isValid = verifyTelegramInitData(initData, BOT_TOKEN);
@@ -349,6 +614,10 @@ app.post("/tg-login", (req, res) => {
 
   db.get("SELECT * FROM users WHERE tg_id = ?", [tg_id_str], (err, existing) => {
     if (existing) {
+      // Feature #8: Check if user is banned
+      if (existing.banned) {
+        return res.status(403).json({ error: `帳戶已被封禁：${existing.ban_reason || "違規操作"}` });
+      }
       db.run("UPDATE users SET tg_first_name=?, tg_last_name=?, tg_username=? WHERE tg_id=?", [first_name, last_name, username, tg_id_str]);
       const token = jwt.sign({ id: existing.id, tg_id: tg_id_str }, JWT_SECRET, { expiresIn: "30d" });
       return res.json({
@@ -391,40 +660,88 @@ app.post("/tg-login", (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// USER AUTH
+// USER AUTH (Feature #4: bcrypt password encryption)
 // ══════════════════════════════════════════════════════════════════════════════
 
-app.post("/register", (req, res) => {
+app.post("/register", registerLimiter, async (req, res) => {
   const inviteCode = generateInviteCode();
   const { username, password, referral } = req.body;
-  db.run("INSERT INTO users(username, password, invite_code) VALUES (?, ?, ?)", [username, password, inviteCode], function(err) {
-    if (err) return res.json({ error: "用戶名已存在" });
-    const newId = this.lastID;
-    // Handle referral
-    if (referral) {
-      db.get("SELECT id FROM users WHERE invite_code = ?", [referral], (e, referrer) => {
-        if (referrer) {
-          db.run("UPDATE users SET invited_by = ? WHERE id = ?", [referrer.id, newId]);
-          db.run("UPDATE users SET invite_count = invite_count + 1 WHERE id = ?", [referrer.id]);
-        }
-      });
-    }
-    sendTG(`📝 新用戶註冊：${username}`);
-    res.json({ ok: true });
-  });
+  if (!username || !password) return res.status(400).json({ error: "請輸入用戶名和密碼" });
+
+  try {
+    // Feature #4: Hash password with bcrypt
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    db.run("INSERT INTO users(username, password, invite_code) VALUES (?, ?, ?)", [username, hashedPassword, inviteCode], function(err) {
+      if (err) return res.json({ error: "用戶名已存在" });
+      const newId = this.lastID;
+      // Handle referral
+      if (referral) {
+        db.get("SELECT id FROM users WHERE invite_code = ?", [referral], (e, referrer) => {
+          if (referrer) {
+            db.run("UPDATE users SET invited_by = ? WHERE id = ?", [referrer.id, newId]);
+            db.run("UPDATE users SET invite_count = invite_count + 1 WHERE id = ?", [referrer.id]);
+          }
+        });
+      }
+      sendTG(`📝 新用戶註冊：${username}`);
+      res.json({ ok: true });
+    });
+  } catch (e) {
+    res.status(500).json({ error: "註冊失敗" });
+  }
 });
 
-app.post("/login", (req, res) => {
-  db.get("SELECT * FROM users WHERE username=? AND password=?", [req.body.username, req.body.password], (e, u) => {
-    if (!u) return res.json({ error: "帳號或密碼錯誤" });
+app.post("/login", loginLimiter, async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "請輸入用戶名和密碼" });
+
+  db.get("SELECT * FROM users WHERE username=?", [username], async (e, u) => {
+    if (!u || !u.password) return res.json({ error: "帳號或密碼錯誤" });
+
+    // Feature #8: Check if user is banned
+    if (u.banned) {
+      return res.status(403).json({ error: `帳戶已被封禁：${u.ban_reason || "違規操作"}` });
+    }
+
+    // Feature #4: Backward compatible password check
+    let passwordMatch = false;
+
+    // Check if password is bcrypt hashed (starts with $2a$ or $2b$)
+    if (u.password.startsWith("$2a$") || u.password.startsWith("$2b$")) {
+      passwordMatch = await bcrypt.compare(password, u.password);
+    } else {
+      // Legacy plaintext password comparison
+      passwordMatch = (u.password === password);
+      // Auto-upgrade: hash the plaintext password
+      if (passwordMatch) {
+        try {
+          const hashedPassword = await bcrypt.hash(password, 10);
+          db.run("UPDATE users SET password = ? WHERE id = ?", [hashedPassword, u.id]);
+          console.log(`[AUTH] Auto-upgraded password for user: ${username}`);
+        } catch (hashErr) {
+          console.error("[AUTH] Failed to auto-upgrade password:", hashErr);
+        }
+      }
+    }
+
+    if (!passwordMatch) return res.json({ error: "帳號或密碼錯誤" });
+
     const token = jwt.sign({ id: u.id }, JWT_SECRET, { expiresIn: "30d" });
     res.json({ token, user: { id: u.id, username: u.username, balance: u.balance, vip_level: u.vip_level || 0, invite_code: u.invite_code } });
   });
 });
 
-app.get("/me", (req, res) => {
+app.get("/me", async (req, res) => {
   try {
     const u = auth(req);
+
+    // Feature #8: Check if user is banned
+    const banCheck = await checkBanned(u.id);
+    if (banCheck.banned) {
+      return res.status(403).json({ error: `帳戶已被封禁：${banCheck.reason}` });
+    }
+
     db.get("SELECT * FROM users WHERE id=?", [u.id], (e, row) => {
       if (!row) return res.json({ error: "用戶不存在" });
       const vipLevel = getVipLevel(row.total_bet || 0);
@@ -441,8 +758,85 @@ app.get("/me", (req, res) => {
         first_deposit_claimed: row.first_deposit_claimed || 0,
         wager_requirement: row.wager_requirement || 0,
         risk_flag: row.risk_flag || 0,
+        banned: row.banned || 0,
+        ban_reason: row.ban_reason || "",
       });
     });
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Feature #3: USER WITHDRAWAL REQUEST
+// ══════════════════════════════════════════════════════════════════════════════
+
+app.post("/withdraw", async (req, res) => {
+  try {
+    const u = auth(req);
+
+    // Feature #8: Check if user is banned
+    const banCheck = await checkBanned(u.id);
+    if (banCheck.banned) {
+      return res.status(403).json({ error: `帳戶已被封禁：${banCheck.reason}` });
+    }
+
+    const { amount, wallet_address } = req.body;
+    if (!amount || !wallet_address) return res.status(400).json({ error: "請輸入提款金額和錢包地址" });
+
+    const numAmount = parseFloat(amount);
+    if (isNaN(numAmount) || numAmount <= 0) return res.status(400).json({ error: "金額必須為正數" });
+    if (numAmount < 10) return res.status(400).json({ error: "最低提款金額為 10 USDT" });
+
+    const user = await dbGet("SELECT * FROM users WHERE id = ?", [u.id]);
+    if (!user) return res.status(404).json({ error: "用戶不存在" });
+    if (user.risk_flag) return res.status(403).json({ error: "帳戶異常，請聯繫客服" });
+
+    // Check balance
+    if (user.balance < numAmount) {
+      return res.status(400).json({ error: `餘額不足，當前餘額：${user.balance.toFixed(2)} USDT` });
+    }
+
+    // Check wager requirement
+    if ((user.wager_requirement || 0) > 0) {
+      return res.status(400).json({
+        error: `流水要求未達標，還需完成 ${user.wager_requirement.toFixed(2)} USDT 流水`,
+        wager_remaining: user.wager_requirement
+      });
+    }
+
+    // Check if there's already a pending withdrawal
+    const pendingWithdrawal = await dbGet("SELECT * FROM withdrawals WHERE user_id = ? AND status = 'pending'", [u.id]);
+    if (pendingWithdrawal) {
+      return res.status(400).json({ error: "您已有一筆待審核的提款申請，請等待處理完成" });
+    }
+
+    // Create withdrawal request
+    await dbRun("INSERT INTO withdrawals (user_id, amount, wallet_address, status) VALUES (?, ?, ?, 'pending')",
+      [u.id, numAmount, wallet_address]);
+
+    sendTG(`📤 提款申請 | ${user.tg_username || user.username} | ${numAmount} USDT | 地址: ${wallet_address}`);
+
+    if (user.tg_id) {
+      sendTGToUser(user.tg_id, `📤 <b>提款申請已提交</b>\n\n💸 金額：<b>${numAmount.toFixed(2)} USDT</b>\n📬 地址：${wallet_address}\n⏳ 狀態：審核中\n\n請耐心等待審核，通常 24 小時內處理。`);
+    }
+
+    res.json({ ok: true, message: "提款申請已提交，請等待審核" });
+  } catch (e) {
+    if (e.name === "JsonWebTokenError" || e.name === "TokenExpiredError") {
+      return res.status(401).json({ error: "未授權" });
+    }
+    console.error("Withdraw error:", e);
+    res.status(500).json({ error: "提款申請失敗" });
+  }
+});
+
+// User: Get own withdrawal history
+app.get("/withdraw/history", async (req, res) => {
+  try {
+    const u = auth(req);
+    const rows = await dbAll("SELECT * FROM withdrawals WHERE user_id = ? ORDER BY created_at DESC LIMIT 50", [u.id]);
+    res.json(rows);
   } catch (e) {
     res.status(401).json({ error: "未授權" });
   }
@@ -455,6 +849,13 @@ app.get("/me", (req, res) => {
 app.post("/promo/first-deposit", async (req, res) => {
   try {
     const u = auth(req);
+
+    // Feature #8: Check if user is banned
+    const banCheck = await checkBanned(u.id);
+    if (banCheck.banned) {
+      return res.status(403).json({ error: `帳戶已被封禁：${banCheck.reason}` });
+    }
+
     const user = await dbGet("SELECT * FROM users WHERE id = ?", [u.id]);
     if (!user) return res.status(404).json({ error: "用戶不存在" });
     if (user.risk_flag) return res.status(403).json({ error: "帳戶異常，請聯繫客服" });
@@ -548,6 +949,13 @@ app.get("/promo/checkin-status", async (req, res) => {
 app.post("/promo/checkin", async (req, res) => {
   try {
     const u = auth(req);
+
+    // Feature #8: Check if user is banned
+    const banCheck = await checkBanned(u.id);
+    if (banCheck.banned) {
+      return res.status(403).json({ error: `帳戶已被封禁：${banCheck.reason}` });
+    }
+
     const user = await dbGet("SELECT * FROM users WHERE id = ?", [u.id]);
     if (!user) return res.status(404).json({ error: "用戶不存在" });
     if (user.risk_flag) return res.status(403).json({ error: "帳戶異常" });
@@ -754,6 +1162,13 @@ app.get("/promo/tasks", async (req, res) => {
 app.post("/promo/claim-task", async (req, res) => {
   try {
     const u = auth(req);
+
+    // Feature #8: Check if user is banned
+    const banCheck = await checkBanned(u.id);
+    if (banCheck.banned) {
+      return res.status(403).json({ error: `帳戶已被封禁：${banCheck.reason}` });
+    }
+
     const user = await dbGet("SELECT * FROM users WHERE id = ?", [u.id]);
     if (!user) return res.status(404).json({ error: "用戶不存在" });
     if (user.risk_flag) return res.status(403).json({ error: "帳戶異常" });
@@ -821,12 +1236,33 @@ app.get("/promo/weekend-status", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Feature #12: REBATE HISTORY (User)
+// ══════════════════════════════════════════════════════════════════════════════
+
+app.get("/promo/rebate-history", async (req, res) => {
+  try {
+    const u = auth(req);
+    const rows = await dbAll("SELECT * FROM rebate_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 50", [u.id]);
+    res.json(rows);
+  } catch (e) {
+    res.status(401).json({ error: "未授權" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
 // PAYMENT (updated with referral + first deposit tracking)
 // ══════════════════════════════════════════════════════════════════════════════
 
 app.post("/create-payment", async (req, res) => {
   try {
     const u = auth(req);
+
+    // Feature #8: Check if user is banned
+    const banCheck = await checkBanned(u.id);
+    if (banCheck.banned) {
+      return res.status(403).json({ error: `帳戶已被封禁：${banCheck.reason}` });
+    }
+
     if (!process.env.PAY_KEY) return res.json({ error: "儲值功能尚未啟用" });
     const pay = await axios.post("https://api.nowpayments.io/v1/payment", { price_amount: req.body.amount, price_currency: "usd", pay_currency: "usdttrc20" }, { headers: { "x-api-key": process.env.PAY_KEY } });
     db.run("INSERT INTO deposits(user_id, amount, status, payment_id) VALUES (?,?,?,?)", [u.id, req.body.amount, "waiting", pay.data.payment_id]);
@@ -900,15 +1336,18 @@ app.get("/promo/summary", async (req, res) => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 app.get("/", (req, res) => res.json({
-  status: "ok", service: "la1-backend", version: "3.0.0",
+  status: "ok", service: "la1-backend", version: "4.0.0",
   endpoints: [
     "/tg-login", "/login", "/register", "/me",
+    "/withdraw", "/withdraw/history",
     "/promo/first-deposit", "/promo/checkin", "/promo/checkin-status",
     "/promo/vip-info", "/promo/referral-info", "/promo/tasks", "/promo/claim-task",
-    "/promo/weekend-status", "/promo/summary",
+    "/promo/weekend-status", "/promo/summary", "/promo/rebate-history",
     "/admin/login", "/admin/users", "/admin/adjust-balance", "/admin/flag-user",
+    "/admin/ban-user", "/admin/withdrawals", "/admin/review-withdrawal",
+    "/admin/calculate-rebate",
   ]
 }));
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`LA1 Backend v3.0 running on port ${PORT}`));
+app.listen(PORT, () => console.log(`LA1 Backend v4.0 running on port ${PORT}`));
