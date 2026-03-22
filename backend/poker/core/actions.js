@@ -1,6 +1,9 @@
 /**
  * Betting Actions — Texas Hold'em
  * All bet limits derived from room config (no hard-coded values).
+ *
+ * IMPORTANT: currentPlayerIndex is an index into the FULL state.players array
+ * (which may contain nulls for empty seats), NOT a filtered active-only array.
  */
 
 const { getActivePlayers } = require("./state");
@@ -15,13 +18,13 @@ const { getActivePlayers } = require("./state");
  * @returns {{ success: boolean, error?: string }}
  */
 function applyAction(state, playerId, action, amount = 0) {
+  // Use String() for safe comparison (Telegram IDs may be number or string)
   const player = state.players.find(p => p && String(p.id) === String(playerId));
   if (!player) return { success: false, error: "Player not found" };
   if (player.folded || player.allIn) return { success: false, error: "Player already out of action" };
 
+  // currentPlayerIndex is an index into the FULL players array
   const currentIdx = state.currentPlayerIndex;
-  // currentPlayerIndex is an index into the FULL players array (set by dealer.js),
-  // NOT into the filtered active-only array.
   const currentPlayer = state.players[currentIdx];
   if (!currentPlayer || String(currentPlayer.id) !== String(playerId)) {
     return { success: false, error: "Not your turn" };
@@ -148,6 +151,45 @@ function isBettingRoundOver(state) {
   });
 }
 
+/**
+ * handleBet — wrapper used by dealer.js handleAction.
+ * Applies the action directly to the player (turn validation done by caller).
+ *
+ * @param {object} state
+ * @param {object} player  - The player object (already resolved by dealer)
+ * @param {string} action  - FOLD | CHECK | CALL | RAISE | ALL_IN
+ * @param {number} amount
+ * @returns {{ success: boolean, error?: string, amount?: number }}
+ */
+function handleBet(state, player, action, amount = 0) {
+  if (!player) return { success: false, error: "Player not found" };
+  if (player.folded || player.allIn) return { success: false, error: "Player already out of action" };
+
+  // Verify it's this player's turn (using full array index)
+  const currentPlayer = state.players[state.currentPlayerIndex];
+  if (!currentPlayer || String(currentPlayer.id) !== String(player.id)) {
+    return { success: false, error: "Not your turn" };
+  }
+
+  const callAmount = state.currentBet - player.bet;
+
+  switch (action.toUpperCase()) {
+    case "FOLD":
+      return applyFold(state, player);
+    case "CHECK":
+      if (callAmount > 0) return { success: false, error: "Cannot check, must call or fold" };
+      return applyCheck(state, player);
+    case "CALL":
+      return applyCall(state, player, callAmount);
+    case "RAISE":
+      return applyRaise(state, player, amount);
+    case "ALL_IN":
+      return applyAllIn(state, player);
+    default:
+      return { success: false, error: `Unknown action: ${action}` };
+  }
+}
+
 function recordHistory(state, player, action, amount) {
   if (!state.history) state.history = [];
   state.history.push({
@@ -160,4 +202,4 @@ function recordHistory(state, player, action, amount) {
   });
 }
 
-module.exports = { applyAction, isBettingRoundOver };
+module.exports = { applyAction, handleBet, isBettingRoundOver };

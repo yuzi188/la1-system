@@ -42,8 +42,12 @@ async function getOrCreateRoom(roomId) {
     roundInProgress: false,
   };
 
-  // Create initial game state
-  room.state = createGameState(maxPlayers);
+  // Create initial game state with proper roomId
+  room.state = createGameState(roomId, {
+    smallBlind: roomConfig.small_blind || 1,
+    bigBlind:   roomConfig.big_blind || 2,
+    maxPlayers: maxPlayers,
+  });
   room.state.roomId = roomId;
   room.state.smallBlind = roomConfig.small_blind || 1;
   room.state.bigBlind = roomConfig.big_blind || 2;
@@ -57,6 +61,11 @@ async function getOrCreateRoom(roomId) {
 
 function sanitizeState(state, forPlayerId) {
   if (!state) return null;
+
+  // Determine current player ID for frontend convenience
+  const currentPlayer = state.players[state.currentPlayerIndex];
+  const currentPlayerId = currentPlayer ? currentPlayer.id : null;
+
   return {
     roomId: state.roomId,
     phase: state.phase || "WAITING",
@@ -67,9 +76,12 @@ function sanitizeState(state, forPlayerId) {
     bigBlind: state.bigBlind || 2,
     dealerIndex: state.dealerIndex || 0,
     currentPlayerIndex: state.currentPlayerIndex || 0,
+    // Send currentPlayerId so frontend can reliably determine whose turn it is
+    currentPlayerId: currentPlayerId,
     players: (state.players || []).map((p, idx) => {
       if (!p) return null;
-      const isMe = p.id === forPlayerId;
+      // Use String() for safe comparison (Telegram IDs may be number or string)
+      const isMe = String(p.id) === String(forPlayerId);
       const isShowdown = state.phase === "SHOWDOWN" || state.phase === "SETTLE";
       return {
         id: p.id,
@@ -109,9 +121,17 @@ function startTurnTimer(room, nsp) {
   const timeoutMs = parseInt(sysConfig.turn_timeout_ms || "30000", 10);
   const warningMs = parseInt(sysConfig.turn_warning_ms || "10000", 10);
 
-  // Find current player — currentPlayerIndex is an index into the FULL players array
+  // currentPlayerIndex is an index into the FULL players array
   const currentPlayer = state.players[state.currentPlayerIndex];
-  if (!currentPlayer || !currentPlayer.isActive || currentPlayer.folded || currentPlayer.allIn) return;
+  if (!currentPlayer || !currentPlayer.isActive || currentPlayer.folded || currentPlayer.allIn) {
+    // Skip to next valid player
+    moveToNextPlayer(state);
+    const nextPlayer = state.players[state.currentPlayerIndex];
+    if (!nextPlayer || !nextPlayer.isActive || nextPlayer.folded || nextPlayer.allIn) return;
+    // Restart with the corrected player
+    startTurnTimer(room, nsp);
+    return;
+  }
 
   // Emit TURN event
   nsp.to(room.id).emit("TURN", {
@@ -150,10 +170,20 @@ function executeBotAction(room, bot, nsp) {
 
 function processAction(room, playerId, action, amount, nsp) {
   const state = room.state;
+
+  console.log(`[Poker] processAction: player=${playerId}, action=${action}, amount=${amount}, currentPlayerIndex=${state.currentPlayerIndex}, currentPlayer=${state.players[state.currentPlayerIndex]?.id}`);
+
   const result = handleAction(state, playerId, action, amount);
 
   if (!result.success) {
+    console.log(`[Poker] Action failed: ${result.error}`);
     // Find socket for this player and send error
+    const player = state.players.find(p => p && String(p.id) === String(playerId));
+    if (player && player.socketId) {
+      nsp.to(player.socketId).emit("ACTION_ERROR", { error: result.error });
+    }
+    // Restart turn timer so the player can try again
+    startTurnTimer(room, nsp);
     return;
   }
 
@@ -164,7 +194,7 @@ function processAction(room, playerId, action, amount, nsp) {
   nsp.to(room.id).emit("ACTION", {
     playerId,
     action,
-    amount: result.amount || 0,
+    amount: result.amount || amount || 0,
     pot: state.pot,
   });
 
@@ -211,6 +241,7 @@ function processAction(room, playerId, action, amount, nsp) {
         // All-in runout: auto-advance after delay
         setTimeout(() => processAutoRun(room, nsp), 1500);
       } else {
+        broadcastState(room, nsp);
         startTurnTimer(room, nsp);
       }
 
@@ -219,6 +250,7 @@ function processAction(room, playerId, action, amount, nsp) {
       if (advResult.autoRun) {
         setTimeout(() => processAutoRun(room, nsp), 1500);
       } else {
+        broadcastState(room, nsp);
         startTurnTimer(room, nsp);
       }
 
@@ -227,12 +259,14 @@ function processAction(room, playerId, action, amount, nsp) {
       if (advResult.autoRun) {
         setTimeout(() => processAutoRun(room, nsp), 1500);
       } else {
+        broadcastState(room, nsp);
         startTurnTimer(room, nsp);
       }
     }
   } else {
     // Move to next player
     moveToNextPlayer(state);
+    broadcastState(room, nsp);
     startTurnTimer(room, nsp);
   }
 }
@@ -262,9 +296,11 @@ function processAutoRun(room, nsp) {
   }
 }
 
+/**
+ * Move to the next active, non-folded, non-all-in player.
+ * currentPlayerIndex is always an index into the FULL players array.
+ */
 function moveToNextPlayer(state) {
-  // currentPlayerIndex is an index into the FULL players array.
-  // We must iterate the full array to find the next active, non-folded, non-allIn player.
   const len = state.players.length;
   if (len === 0) return;
 
@@ -325,7 +361,6 @@ async function tryStartRound(room, nsp) {
     nsp.to(p.socketId).emit("DEAL", sanitized);
   });
 
-  // Start first turn timer
   startTurnTimer(room, nsp);
 }
 
@@ -391,13 +426,14 @@ function initPokerSocket(io) {
           return;
         }
 
-        // Check if already in room
-        const existing = room.players.find(p => p && p.id === userId);
+        // Check if already in room (use String() for safe comparison)
+        const existing = room.players.find(p => p && String(p.id) === String(userId));
         if (existing) {
           existing.socketId = socket.id;
+          existing.connected = true;
           socket.join(room.id);
-          socket.data = { roomId, userId };
-          socket.emit("JOIN_SUCCESS", { state: sanitizeState(room.state, userId) });
+          socket.data = { roomId, userId: String(userId) };
+          socket.emit("JOIN_SUCCESS", { state: sanitizeState(room.state, String(userId)) });
           return;
         }
 
@@ -408,9 +444,9 @@ function initPokerSocket(io) {
           return;
         }
 
-        // Create player
+        // Create player — always store ID as string for consistent comparison
         const player = {
-          id: userId,
+          id: String(userId),
           name: userName || "玩家",
           chips: buyIn,
           buyIn,
@@ -425,15 +461,16 @@ function initPokerSocket(io) {
           hasActed: false,
           seatIndex: emptySeat,
           socketId: socket.id,
+          connected: true,
         };
 
         room.players[emptySeat] = player;
         room.state.players = room.players;
 
         socket.join(room.id);
-        socket.data = { roomId, userId };
+        socket.data = { roomId, userId: String(userId) };
 
-        socket.emit("JOIN_SUCCESS", { state: sanitizeState(room.state, userId) });
+        socket.emit("JOIN_SUCCESS", { state: sanitizeState(room.state, String(userId)) });
 
         // Broadcast update to others
         broadcastState(room, nsp);
@@ -452,15 +489,23 @@ function initPokerSocket(io) {
     socket.on("ACTION", ({ roomId, action, amount }) => {
       try {
         const userId = socket.data?.userId;
-        if (!userId || !roomId) return;
+        if (!userId || !roomId) {
+          console.log(`[Poker] ACTION rejected: missing userId=${userId} or roomId=${roomId}`);
+          return;
+        }
 
         const room = rooms.get(roomId);
-        if (!room) return;
+        if (!room) {
+          console.log(`[Poker] ACTION rejected: room ${roomId} not found`);
+          return;
+        }
 
+        console.log(`[Poker] ACTION received: userId=${userId}, action=${action}, amount=${amount}, room=${roomId}`);
         clearTurnTimer(room);
-        processAction(room, userId, action, amount || 0, nsp);
+        processAction(room, String(userId), action, amount || 0, nsp);
       } catch (e) {
         console.error("[Poker] ACTION error:", e.message);
+        socket.emit("ACTION_ERROR", { error: e.message });
       }
     });
 
@@ -490,7 +535,8 @@ function handleLeave(socket, nsp) {
   const room = rooms.get(roomId);
   if (!room) return;
 
-  const playerIdx = room.players.findIndex(p => p && p.id === userId);
+  // Use String() for safe comparison
+  const playerIdx = room.players.findIndex(p => p && String(p.id) === String(userId));
   if (playerIdx !== -1) {
     room.players[playerIdx] = null;
     room.state.players = room.players;

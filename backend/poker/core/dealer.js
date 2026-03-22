@@ -2,6 +2,9 @@
  * poker/core/dealer.js — Game flow controller
  *
  * Manages round lifecycle: deal, blinds, advance phases, showdown, settle.
+ *
+ * IMPORTANT: currentPlayerIndex is always an index into the FULL state.players
+ * array (which may contain nulls for empty seats), NOT a filtered active array.
  */
 
 const { createGameState, createDeck } = require("./state");
@@ -20,11 +23,8 @@ function startRound(state) {
   // Generate session ID
   state.sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  // Rotate dealer
-  state.dealerIndex = (state.dealerIndex + 1) % state.players.length;
-  while (!state.players[state.dealerIndex] || !state.players[state.dealerIndex].isActive) {
-    state.dealerIndex = (state.dealerIndex + 1) % state.players.length;
-  }
+  // Rotate dealer (full array index)
+  state.dealerIndex = findNextActive(state, state.dealerIndex);
 
   // Reset round state
   state.phase = "PREFLOP";
@@ -52,7 +52,7 @@ function startRound(state) {
     p.cards = [state.deck.pop(), state.deck.pop()];
   });
 
-  // Post blinds
+  // Post blinds (full array indices)
   const sbIndex = findNextActive(state, state.dealerIndex);
   const bbIndex = findNextActive(state, sbIndex);
 
@@ -75,8 +75,10 @@ function startRound(state) {
   state.pot = sbAmount + bbAmount;
   state.currentBet = bbAmount;
 
-  // First to act is after BB
+  // First to act is after BB (full array index, skip folded/all-in)
   state.currentPlayerIndex = findNextActiveIndex(state, bbIndex);
+
+  console.log(`[Dealer] startRound: dealer=${state.dealerIndex}, sb=${sbIndex}, bb=${bbIndex}, firstToAct=${state.currentPlayerIndex}, player=${state.players[state.currentPlayerIndex]?.id}`);
 
   // Persist
   pokerDb.saveRound(state.sessionId, state.roomId, state).catch(() => {});
@@ -87,6 +89,7 @@ function startRound(state) {
 // ── Handle player action ─────────────────────────────────────────────────────
 
 function handleAction(state, playerId, action, amount) {
+  // Use String() for safe comparison
   const player = state.players.find(p => p && String(p.id) === String(playerId));
   if (!player || player.folded || !player.isActive) return { success: false, error: "Invalid player" };
 
@@ -97,7 +100,7 @@ function handleAction(state, playerId, action, amount) {
   pokerDb.logAction(state.sessionId, playerId, action, result.amount || 0, state.phase).catch(() => {});
 
   player.hasActed = true;
-  player.lastAction = action;
+  // lastAction is already set by handleBet/applyAction
 
   return result;
 }
@@ -159,8 +162,10 @@ function advancePhase(state) {
     return { advance: true, phase: nextPhase, cards: newCards, autoRun: true };
   }
 
-  // Set first to act (after dealer)
+  // Set first to act (after dealer, full array index)
   state.currentPlayerIndex = findNextActiveNonFoldIndex(state, state.dealerIndex);
+
+  console.log(`[Dealer] advancePhase to ${nextPhase}: firstToAct=${state.currentPlayerIndex}, player=${state.players[state.currentPlayerIndex]?.id}`);
 
   return { advance: true, phase: nextPhase, cards: newCards, autoRun: false };
 }
@@ -211,7 +216,7 @@ function settleRound(state) {
     if (sidePots.length > 0) {
       const distributions = distributePots(sidePots, results);
       distributions.forEach(d => {
-        const player = state.players.find(p => p && p.id === d.playerId);
+        const player = state.players.find(p => p && String(p.id) === String(d.playerId));
         if (player) player.chips += d.amount;
         winners.push({ playerId: d.playerId, name: player?.name, amount: d.amount, handName: d.handName || "" });
       });
@@ -240,7 +245,7 @@ function settleRound(state) {
       name: r.player.name,
       cards: r.player.cards,
       handName: r.name || "",
-      won: winners.find(w => w.playerId === r.player.id)?.amount || 0,
+      won: winners.find(w => String(w.playerId) === String(r.player.id))?.amount || 0,
     }));
   }
 
@@ -259,6 +264,9 @@ function settleRound(state) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Find next active (non-folded) player index in the FULL players array.
+ */
 function findNextActive(state, fromIndex) {
   let idx = (fromIndex + 1) % state.players.length;
   let count = 0;
@@ -271,6 +279,9 @@ function findNextActive(state, fromIndex) {
   return fromIndex;
 }
 
+/**
+ * Find next active, non-folded, non-all-in player index in the FULL players array.
+ */
 function findNextActiveIndex(state, fromIndex) {
   let idx = (fromIndex + 1) % state.players.length;
   let count = 0;

@@ -88,16 +88,23 @@ function nextPhase(state) {
   return state;
 }
 
+/**
+ * Get active (non-folded) players. Null-safe for sparse arrays.
+ */
 function getActivePlayers(state) {
-  return state.players.filter(p => p.isActive && !p.folded);
+  return state.players.filter(p => p && p.isActive && !p.folded);
 }
 
 function getNonAllInPlayers(state) {
   return getActivePlayers(state).filter(p => !p.allIn);
 }
 
+/**
+ * Reset per-street state. Null-safe for sparse arrays.
+ */
 function resetRound(state) {
   state.players.forEach(p => {
+    if (!p) return;
     p.bet = 0;
     p.lastAction = null;
   });
