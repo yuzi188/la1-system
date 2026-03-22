@@ -223,6 +223,64 @@ async function logAction(sessionId, playerId, action, amount, phase) {
   }
 }
 
+// ── Wallet operations ────────────────────────────────────────────────────────
+
+async function deductBuyIn(userId, amount) {
+  try {
+    const user = await dbGet("SELECT balance FROM users WHERE tg_id = ? OR id = ?", [userId, userId]);
+    if (!user) {
+      return { success: false, error: "用戶不存在" };
+    }
+    const balance = parseFloat(user.balance) || 0;
+    if (balance < amount) {
+      return { success: false, error: `餘額不足 (餘額: ${balance}, 需要: ${amount})` };
+    }
+    const newBalance = balance - amount;
+    await dbRun("UPDATE users SET balance = ? WHERE tg_id = ? OR id = ?", [newBalance, userId, userId]);
+    console.log(`[Poker DB] deductBuyIn: userId=${userId}, amount=${amount}, newBalance=${newBalance}`);
+    return { success: true, newBalance };
+  } catch (e) {
+    console.error("[Poker DB] deductBuyIn error:", e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+async function creditWinnings(userId, amount) {
+  try {
+    const user = await dbGet("SELECT balance FROM users WHERE tg_id = ? OR id = ?", [userId, userId]);
+    if (!user) {
+      console.warn(`[Poker DB] creditWinnings: user ${userId} not found`);
+      return { success: false, error: "用戶不存在" };
+    }
+    const balance = parseFloat(user.balance) || 0;
+    const newBalance = balance + amount;
+    await dbRun("UPDATE users SET balance = ? WHERE tg_id = ? OR id = ?", [newBalance, userId, userId]);
+    console.log(`[Poker DB] creditWinnings: userId=${userId}, amount=${amount}, newBalance=${newBalance}`);
+    return { success: true, newBalance };
+  } catch (e) {
+    console.error("[Poker DB] creditWinnings error:", e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+async function deductRebuy(userId, amount) {
+  return deductBuyIn(userId, amount);
+}
+
+async function refundChips(userId, chips) {
+  return creditWinnings(userId, chips);
+}
+
+async function getUserBalance(userId) {
+  try {
+    const user = await dbGet("SELECT balance FROM users WHERE tg_id = ? OR id = ?", [userId, userId]);
+    return user ? (parseFloat(user.balance) || 0) : 0;
+  } catch (e) {
+    console.error("[Poker DB] getUserBalance error:", e.message);
+    return 0;
+  }
+}
+
 module.exports = {
   initPokerSchema,
   loadSystemConfigs,
@@ -232,4 +290,9 @@ module.exports = {
   saveRound,
   finalizeRound,
   logAction,
+  deductBuyIn,
+  deductRebuy,
+  creditWinnings,
+  refundChips,
+  getUserBalance,
 };
