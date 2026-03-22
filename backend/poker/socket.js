@@ -109,10 +109,9 @@ function startTurnTimer(room, nsp) {
   const timeoutMs = parseInt(sysConfig.turn_timeout_ms || "30000", 10);
   const warningMs = parseInt(sysConfig.turn_warning_ms || "10000", 10);
 
-  // Find current player
-  const activePlayers = state.players.filter(p => p && p.isActive && !p.folded && !p.allIn);
-  const currentPlayer = activePlayers[state.currentPlayerIndex];
-  if (!currentPlayer) return;
+  // Find current player — currentPlayerIndex is an index into the FULL players array
+  const currentPlayer = state.players[state.currentPlayerIndex];
+  if (!currentPlayer || !currentPlayer.isActive || currentPlayer.folded || currentPlayer.allIn) return;
 
   // Emit TURN event
   nsp.to(room.id).emit("TURN", {
@@ -264,15 +263,17 @@ function processAutoRun(room, nsp) {
 }
 
 function moveToNextPlayer(state) {
-  const activePlayers = state.players.filter(p => p && p.isActive && !p.folded && !p.allIn);
-  if (activePlayers.length === 0) return;
+  // currentPlayerIndex is an index into the FULL players array.
+  // We must iterate the full array to find the next active, non-folded, non-allIn player.
+  const len = state.players.length;
+  if (len === 0) return;
 
-  let nextIdx = (state.currentPlayerIndex + 1) % activePlayers.length;
-  // Wrap around to find someone who hasn't acted
+  let nextIdx = (state.currentPlayerIndex + 1) % len;
   let count = 0;
-  while (count < activePlayers.length) {
-    if (!activePlayers[nextIdx]?.hasActed) break;
-    nextIdx = (nextIdx + 1) % activePlayers.length;
+  while (count < len) {
+    const p = state.players[nextIdx];
+    if (p && p.isActive && !p.folded && !p.allIn) break;
+    nextIdx = (nextIdx + 1) % len;
     count++;
   }
   state.currentPlayerIndex = nextIdx;

@@ -15,13 +15,15 @@ const { getActivePlayers } = require("./state");
  * @returns {{ success: boolean, error?: string }}
  */
 function applyAction(state, playerId, action, amount = 0) {
-  const player = state.players.find(p => p.id === playerId);
+  const player = state.players.find(p => p && String(p.id) === String(playerId));
   if (!player) return { success: false, error: "Player not found" };
   if (player.folded || player.allIn) return { success: false, error: "Player already out of action" };
 
   const currentIdx = state.currentPlayerIndex;
-  const currentPlayer = getActivePlayers(state)[currentIdx];
-  if (!currentPlayer || currentPlayer.id !== playerId) {
+  // currentPlayerIndex is an index into the FULL players array (set by dealer.js),
+  // NOT into the filtered active-only array.
+  const currentPlayer = state.players[currentIdx];
+  if (!currentPlayer || String(currentPlayer.id) !== String(playerId)) {
     return { success: false, error: "Not your turn" };
   }
 

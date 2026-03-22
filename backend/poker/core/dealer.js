@@ -87,7 +87,7 @@ function startRound(state) {
 // ── Handle player action ─────────────────────────────────────────────────────
 
 function handleAction(state, playerId, action, amount) {
-  const player = state.players.find(p => p && p.id === playerId);
+  const player = state.players.find(p => p && String(p.id) === String(playerId));
   if (!player || player.folded || !player.isActive) return { success: false, error: "Invalid player" };
 
   const result = handleBet(state, player, action, amount);
