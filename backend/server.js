@@ -36,6 +36,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Trust Railway's reverse proxy for correct client IP detection
+app.set("trust proxy", 1);
+
 // ══════════════════════════════════════════════════════════════════════════════
 // RATE LIMITING (Feature #5)
 // ══════════════════════════════════════════════════════════════════════════════
