@@ -19,7 +19,7 @@ const BOT_NAMES = [
 function getBotFillCount(room, sysConfig) {
   const roomConfig = room.config || {};
   const enableBot = roomConfig.enable_bot !== undefined ? roomConfig.enable_bot : (sysConfig.bot_enabled !== "0");
-
+  console.log(`[Matchmaking] room=${room.id} enableBot=${enableBot} rc.enable_bot=${roomConfig.enable_bot} sys.bot_enabled=${sysConfig.bot_enabled}`);
   if (!enableBot) return 0;
 
   const humanCount = room.players.filter(p => p && p.isActive && !p.isBot).length;
@@ -27,12 +27,13 @@ function getBotFillCount(room, sysConfig) {
   const maxPlayers = roomConfig.max_players || 6;
   const fillTarget = roomConfig.bot_fill_target || parseInt(sysConfig.bot_fill_target || "4", 10);
 
+  console.log(`[Matchmaking] humans=${humanCount} active=${totalActive} max=${maxPlayers} target=${fillTarget}`);
   if (humanCount < 1) return 0; // No humans, no bots
 
-  // Calculate how many bots to add
+  // 1 human is enough — fill bots to reach fillTarget
   const targetTotal = Math.min(fillTarget, maxPlayers);
   const botsNeeded = Math.max(0, targetTotal - totalActive);
-
+  console.log(`[Matchmaking] botsNeeded=${botsNeeded}`);
   return botsNeeded;
 }
 
@@ -77,6 +78,7 @@ function fillBots(room, sysConfig) {
     bot.seatIndex = emptySeat;
     room.players[emptySeat] = bot;
     added.push(bot);
+    console.log(`[Matchmaking] Added bot "${bot.name}" seat=${emptySeat} chips=${bot.chips}`);
   }
 
   return added;
@@ -85,6 +87,7 @@ function fillBots(room, sysConfig) {
 function canStartRound(room, sysConfig) {
   const minPlayers = parseInt(sysConfig.mm_min_players || "2", 10);
   const activePlayers = room.players.filter(p => p && p.isActive && p.chips > 0);
+  console.log(`[Matchmaking] canStart: active=${activePlayers.length} min=${minPlayers}`);
   return activePlayers.length >= minPlayers;
 }
 

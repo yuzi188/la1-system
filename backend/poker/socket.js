@@ -289,6 +289,7 @@ function broadcastState(room, nsp) {
 // ── Try to start a round ─────────────────────────────────────────────────────
 
 async function tryStartRound(room, nsp) {
+  console.log(`[Poker] tryStartRound room=${room.id} inProgress=${room.roundInProgress} players=${room.players.filter(p=>p).length}`);
   if (room.roundInProgress) return;
 
   // Reload configs
@@ -437,7 +438,8 @@ function initPokerSocket(io) {
         broadcastState(room, nsp);
 
         // Try to start round (will fill bots if needed)
-        setTimeout(() => tryStartRound(room, nsp), 1000);
+        console.log(`[Poker] Player ${userId} joined room ${roomId}, triggering tryStartRound in 2s`);
+        setTimeout(() => tryStartRound(room, nsp), 2000);
 
       } catch (e) {
         console.error("[Poker] JOIN_ROOM error:", e.message);
