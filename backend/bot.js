@@ -10,6 +10,20 @@ const SITE_URL = process.env.SITE_URL || "https://la1-website-production.up.rail
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
+// ── Graceful error handling for Telegram polling ────────────────────────────
+bot.on("polling_error", (err) => {
+  console.error("[Bot] Polling error:", err.code || err.message);
+  // If unauthorized, stop polling to prevent infinite error spam
+  if (err.code === "ETELEGRAM" && err.message && err.message.includes("401")) {
+    console.error("[Bot] Bot token is invalid (401 Unauthorized). Stopping polling.");
+    bot.stopPolling();
+  }
+});
+
+bot.on("error", (err) => {
+  console.error("[Bot] General error:", err.message);
+});
+
 // ── Ensure leads table exists ───────────────────────────────────────────────────
 
 db.run(`CREATE TABLE IF NOT EXISTS leads(

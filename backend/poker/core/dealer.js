@@ -4,7 +4,7 @@
  * Manages round lifecycle: deal, blinds, advance phases, showdown, settle.
  */
 
-const { createGameState, shuffle, deal } = require("./state");
+const { createGameState, createDeck } = require("./state");
 const { handleBet }    = require("./actions");
 const { evaluateHand } = require("./engine");
 const { buildSidePots, distributePots } = require("./sidepot");
@@ -47,7 +47,7 @@ function startRound(state) {
   });
 
   // Shuffle and deal
-  state.deck = shuffle();
+  state.deck = createDeck();
   activePlayers.forEach(p => {
     p.cards = [state.deck.pop(), state.deck.pop()];
   });
