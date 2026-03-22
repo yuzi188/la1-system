@@ -2540,7 +2540,7 @@ app.use(adminAgentRoutes);
 app.use("/api/withdrawal", withdrawalRoutes);
 
 app.get("/", (req, res) => res.json({
-  status: "ok", service: "la1-backend", version: "5.4.0-deposit-fix",
+  status: "ok", service: "la1-backend", version: "5.4.1-withdrawal",
   endpoints: [
     "/tg-login", "/login", "/register", "/me",
     "/withdraw", "/withdraw/history",
